@@ -1,0 +1,253 @@
+import type { Order, Product, StoreSettings } from "@/types/domain";
+
+const CHOSUNG_LIST = [
+  "ㄱ",
+  "ㄲ",
+  "ㄴ",
+  "ㄷ",
+  "ㄸ",
+  "ㄹ",
+  "ㅁ",
+  "ㅂ",
+  "ㅃ",
+  "ㅅ",
+  "ㅆ",
+  "ㅇ",
+  "ㅈ",
+  "ㅉ",
+  "ㅊ",
+  "ㅋ",
+  "ㅌ",
+  "ㅍ",
+  "ㅎ",
+] as const;
+
+export function formatKRW(amount: number): string {
+  return `${amount.toLocaleString("ko-KR")}원`;
+}
+
+/**
+ * 한글 문자열에서 초성만 추출합니다. (예: "과일사랑" -> "ㄱㅇㅅㄹ")
+ */
+export function extractChosung(text: string): string {
+  let result = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0) - 0xac00;
+    if (code >= 0 && code < 11172) {
+      const chosungIndex = Math.floor(code / 588);
+      result += CHOSUNG_LIST[chosungIndex] ?? char;
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
+
+/**
+ * 일반 부분 일치 검색과 한글 초성 검색(예: "ㄱㅇㅅㄹ" -> "과일사랑")을 모두 지원합니다.
+ */
+export function matchesKoreanSearch(target: string, query: string): boolean {
+  const cleanQuery = query.trim().toLowerCase().replace(/\s+/g, "");
+  if (!cleanQuery) return true;
+
+  const cleanTarget = target.trim().toLowerCase().replace(/\s+/g, "");
+  if (cleanTarget.includes(cleanQuery)) return true;
+
+  const targetChosung = extractChosung(cleanTarget);
+  return targetChosung.includes(cleanQuery);
+}
+
+/**
+ * 고객이 [주문 전송 및 오픈카톡방 이동] 클릭 시 클립보드에 자동 복사되는 텍스트
+ */
+export function formatOrderClipboardText(order: Order): string {
+  const phoneSuffix = order.customer_phone_last4
+    ? ` (${order.customer_phone_last4})`
+    : "";
+  const lines: string[] = [
+    `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix}`,
+    ...order.items.map(
+      (item) => `- ${item.product_name} (${item.unit_label}) x ${item.quantity}`
+    ),
+    `총 금액: ${formatKRW(order.total_amount)}`,
+  ];
+
+  if (order.pickup_time && order.pickup_time.trim()) {
+    lines.push(`픽업예정: ${order.pickup_time.trim()}`);
+  }
+  if (order.memo && order.memo.trim()) {
+    lines.push(`요청사항: ${order.memo.trim()}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * 사장님이 오픈카톡 공지에 바로 붙여넣을 수 있는 오늘의 과일 홍보 문구 생성
+ */
+export function formatKakaoNoticeText(
+  settings: StoreSettings,
+  products: Product[],
+  siteOrigin = "https://fruit-order-platform.vercel.app"
+): string {
+  const visibleProducts = products.filter((p) => p.is_visible);
+  const todayList = visibleProducts.filter((p) => p.category === "TODAY");
+  const reserveList = visibleProducts.filter((p) => p.category === "RESERVE");
+  const giftList = visibleProducts.filter((p) => p.category === "GIFT_SET");
+
+  const formatLine = (p: Product) => {
+    const stockTag =
+      p.is_limited && p.remain_stock <= 0
+        ? " [품절]"
+        : p.is_limited
+        ? ` [한정 ${p.remain_stock}개]`
+        : "";
+    const brixTag = p.brix ? ` (${p.brix})` : "";
+    return `• ${p.name}${brixTag} ${p.unit_label} : ${formatKRW(p.price)}${stockTag}`;
+  };
+
+  const sections: string[] = [
+    `🍎 [${settings.store_name}] 오늘의 신선 과일 안내 🍓`,
+    settings.notice_text,
+    "",
+  ];
+
+  if (todayList.length > 0) {
+    sections.push("✨ [오늘의 경매 직송 과일]");
+    sections.push(...todayList.map(formatLine));
+    sections.push("");
+  }
+
+  if (reserveList.length > 0) {
+    sections.push("📦 [내일 입고 사전예약 특가]");
+    sections.push(...reserveList.map(formatLine));
+    sections.push("");
+  }
+
+  if (giftList.length > 0) {
+    sections.push("🎁 [실속 묶음 / 선물세트]");
+    sections.push(...giftList.map(formatLine));
+    sections.push("");
+  }
+
+  sections.push(`📍 픽업안내: ${settings.pickup_guide}`);
+  sections.push(`💳 계좌안내: ${settings.bank_account}`);
+  sections.push("");
+  sections.push("👇 아래 링크에서 3초 만에 장바구니 담고 예약해 주세요!");
+  sections.push(siteOrigin);
+
+  return sections.join("\n");
+}
+
+/**
+ * 주문 내역을 엑셀 호환 CSV 문자열(UTF-8 BOM 포함)로 변환
+ */
+export function ordersToCsv(orders: Order[]): string {
+  const headers = [
+    "주문번호",
+    "주문일",
+    "주문시각",
+    "오픈카톡닉네임",
+    "연락처뒷4자리",
+    "주문품목내역",
+    "총결제금액",
+    "결제확인",
+    "주문상태",
+    "픽업예정시간",
+    "요청사항",
+    "접수경로",
+  ];
+
+  const statusLabel: Record<Order["status"], string> = {
+    RESERVED: "예약접수",
+    READY: "입고완료(준비완료)",
+    PICKED_UP: "픽업완료",
+    CANCELED: "취소됨",
+  };
+
+  const escapeCsv = (val: string | number) => {
+    const str = String(val ?? "").replace(/"/g, '""');
+    return `"${str}"`;
+  };
+
+  const rows = orders.map((o) => {
+    const itemsSummary = o.items
+      .map((i) => `${i.product_name}(${i.unit_label}) x${i.quantity}`)
+      .join(" / ");
+    const timeStr = new Date(o.created_at).toLocaleTimeString("ko-KR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    return [
+      o.id.slice(0, 8),
+      o.order_date,
+      timeStr,
+      o.kakao_nickname,
+      o.customer_phone_last4 || "-",
+      itemsSummary,
+      o.total_amount,
+      o.is_paid ? "결제완료" : "미결제",
+      statusLabel[o.status] ?? o.status,
+      o.pickup_time || "-",
+      o.memo || "-",
+      o.source === "KAKAO_BOT" ? "오픈카톡봇" : "모바일웹",
+    ]
+      .map(escapeCsv)
+      .join(",");
+  });
+
+  return "\uFEFF" + [headers.join(","), ...rows].join("\n");
+}
+
+/**
+ * 오픈카톡방 텍스트 메시지(예: "설향 딸기 2\n샤인머스켓 1")를 분석하여 상품 ID와 수량을 추출합니다.
+ */
+export function parseKakaoChatMessage(
+  message: string,
+  products: Product[]
+): Array<{ product_id: string; quantity: number }> {
+  const lines = message
+    .split(/\r?\n|,|\/|\+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const matchedMap = new Map<string, number>();
+  const activeProducts = products.filter((p) => p.is_visible);
+
+  for (const line of lines) {
+    if (line.startsWith("[주문접수]") || line.startsWith("총 금액") || line.startsWith("픽업예정") || line.startsWith("요청사항")) {
+      continue;
+    }
+
+    for (const product of activeProducts) {
+      // 상품명 핵심 키워드 매칭 (공백 제거 비교 및 단어 매칭)
+      const normalizedLine = line.replace(/\s+/g, "");
+      const normalizedName = product.name.replace(/\s+/g, "");
+      const keywords = product.name
+        .split(/\s+/)
+        .filter((w) => w.length >= 2);
+
+      const isMatched =
+        normalizedLine.includes(normalizedName) ||
+        keywords.some((kw) => normalizedLine.includes(kw));
+
+      if (isMatched) {
+        // 줄 끝쪽이나 'x 2', '2팩', '2박스', '2개', '2' 패턴에서 수량 추출
+        const qtyMatch =
+          line.match(/[xX*]\s*(\d+)/) ||
+          line.match(/(\d+)\s*(팩|박스|세트|개|봉|송이|통|망|다발|kg)?\s*$/) ||
+          line.match(/(\d+)/);
+
+        const quantity = qtyMatch ? Math.max(1, parseInt(qtyMatch[1], 10)) : 1;
+        matchedMap.set(product.id, (matchedMap.get(product.id) ?? 0) + quantity);
+        break;
+      }
+    }
+  }
+
+  return Array.from(matchedMap.entries()).map(([product_id, quantity]) => ({
+    product_id,
+    quantity,
+  }));
+}

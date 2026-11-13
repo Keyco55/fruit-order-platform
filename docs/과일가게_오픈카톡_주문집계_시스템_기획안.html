@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>과일 가게 모바일 웹 주문 및 오픈카톡 자동 집계 시스템 기획안</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <style>
+    :root {
+      --primary: #0064FF;
+      --primary-dark: #0050CC;
+      --primary-soft: #E8F3FF;
+      --green: #03B26C;
+      --green-soft: #E8F8F0;
+      --orange: #FF8A00;
+      --orange-soft: #FFF4E5;
+      --danger: #F04452;
+      --danger-soft: #FFEBEE;
+      --kakao: #FEE500;
+      --kakao-text: #191600;
+      --dark: #191F28;
+      --text: #333D4B;
+      --muted: #6B7684;
+      --border: #E5E8EB;
+      --bg-soft: #F9FAFB;
+      --bg-card: #FFFFFF;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    @page {
+      size: A4 portrait;
+      margin: 10mm 13mm;
+    }
+
+    body {
+      font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      color: var(--dark);
+      background: #fff;
+      margin: 0;
+      padding: 0;
+      font-size: 9.5pt;
+      line-height: 1.5;
+      letter-spacing: -0.015em;
+    }
+
+    .page {
+      width: 100%;
+      height: 276mm;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      page-break-after: always;
+      overflow: hidden;
+    }
+    .page:last-child {
+      page-break-after: auto;
+    }
+    .page-content {
+      flex: 1;
+    }
+
+    /* Cover Header */
+    .cover-banner {
+      background: linear-gradient(135deg, #191F28 0%, #1B3B6F 60%, #0064FF 100%);
+      color: #fff;
+      border-radius: 14px;
+      padding: 22px 24px;
+      margin-bottom: 14px;
+    }
+    .cover-badge-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .cover-badge {
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      color: #fff;
+      font-size: 8pt;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+    }
+    .cover-badge.kakao {
+      background: var(--kakao);
+      color: var(--kakao-text);
+      border-color: var(--kakao);
+      font-weight: 700;
+    }
+    .cover-title {
+      font-size: 19.5pt;
+      font-weight: 800;
+      margin: 0 0 6px 0;
+      line-height: 1.25;
+      letter-spacing: -0.03em;
+    }
+    .cover-subtitle {
+      font-size: 9.8pt;
+      color: rgba(255, 255, 255, 0.86);
+      margin: 0 0 14px 0;
+      font-weight: 400;
+    }
+    .cover-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .cover-meta-item .label {
+      font-size: 7.2pt;
+      color: rgba(255, 255, 255, 0.72);
+      margin-bottom: 2px;
+    }
+    .cover-meta-item .val {
+      font-size: 8.8pt;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    /* Section Headings */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 14px 0 8px 0;
+      padding-bottom: 5px;
+      border-bottom: 2px solid var(--dark);
+    }
+    .section-header.first {
+      margin-top: 0;
+    }
+    .section-num {
+      background: var(--primary);
+      color: #fff;
+      font-weight: 800;
+      font-size: 8.5pt;
+      padding: 2px 8px;
+      border-radius: 6px;
+    }
+    .section-title {
+      font-size: 12.5pt;
+      font-weight: 800;
+      margin: 0;
+      color: var(--dark);
+    }
+    .sub-title {
+      font-size: 10pt;
+      font-weight: 700;
+      margin: 10px 0 6px 0;
+      color: var(--dark);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Cards & Grids */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 13px;
+    }
+    .card.soft { background: var(--bg-soft); }
+    .card.blue { background: var(--primary-soft); border-color: #B8D8FF; }
+    .card.green { background: var(--green-soft); border-color: #B2EBD4; }
+    .card.orange { background: var(--orange-soft); border-color: #FFD9A8; }
+    .card-title {
+      font-weight: 700;
+      font-size: 9.5pt;
+      margin: 0 0 5px 0;
+      color: var(--dark);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .card p, .card ul {
+      margin: 0;
+      font-size: 8.6pt;
+      color: var(--text);
+    }
+    .card ul {
+      padding-left: 15px;
+    }
+    .card li {
+      margin-bottom: 3.5px;
+    }
+
+    /* Pill / Badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-size: 7.2pt;
+      font-weight: 700;
+    }
+    .badge-blue { background: var(--primary-soft); color: var(--primary); }
+    .badge-green { background: var(--green-soft); color: var(--green); }
+    .badge-orange { background: var(--orange-soft); color: #C66900; }
+    .badge-danger { background: var(--danger-soft); color: var(--danger); }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+      margin: 6px 0;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 7px 9px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #F2F4F6;
+      font-weight: 700;
+      color: var(--dark);
+    }
+    tr:nth-child(even) td {
+      background: #FAFBFD;
+    }
+
+    /* Flow Diagram Boxes */
+    .flow-container {
+      background: #F8FAFC;
+      border: 1.5px solid #D8E2EE;
+      border-radius: 10px;
+      padding: 12px;
+      margin: 8px 0;
+    }
+    .flow-row {
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .flow-step {
+      flex: 1;
+      background: #fff;
+      border: 1.5px solid var(--border);
+      border-radius: 9px;
+      padding: 9px 8px;
+      text-align: center;
+    }
+    .flow-step.highlight {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+    }
+    .flow-step.kakao-step {
+      border-color: #E6CE00;
+      background: #FFFBE6;
+    }
+    .flow-step.green-step {
+      border-color: var(--green);
+      background: var(--green-soft);
+    }
+    .flow-step .step-num {
+      font-size: 7.2pt;
+      font-weight: 800;
+      color: var(--primary);
+      margin-bottom: 2px;
+    }
+    .flow-step .step-title {
+      font-size: 8.8pt;
+      font-weight: 800;
+      margin-bottom: 3px;
+      color: var(--dark);
+    }
+    .flow-step .step-desc {
+      font-size: 7.5pt;
+      color: var(--text);
+      line-height: 1.35;
+    }
+    .flow-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: var(--primary);
+      font-size: 12pt;
+      padding: 0 1px;
+    }
+
+    /* Mobile Mockups */
+    .mockup-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .phone-frame {
+      border: 2px solid #191F28;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #F2F4F6;
+      display: flex;
+      flex-direction: column;
+    }
+    .phone-header {
+      background: #191F28;
+      color: #fff;
+      padding: 7px 10px;
+      font-size: 8pt;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .phone-body {
+      padding: 8px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 7.6pt;
+    }
+    .mock-box {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 8px;
+    }
+    .mock-tabs {
+      display: flex;
+      gap: 4px;
+    }
+    .mock-tab {
+      padding: 2.5px 7px;
+      border-radius: 99px;
+      font-size: 6.8pt;
+      font-weight: 700;
+      background: #fff;
+      border: 1px solid var(--border);
+    }
+    .mock-tab.active {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .mock-prod {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+    .mock-thumb {
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+      background: #FFF0F3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14pt;
+      flex-shrink: 0;
+    }
+    .mock-btn-row {
+      display: flex;
+      gap: 4px;
+      margin-top: 5px;
+    }
+    .mock-btn {
+      flex: 1;
+      text-align: center;
+      padding: 4px 0;
+      border-radius: 5px;
+      font-weight: 700;
+      font-size: 7.2pt;
+    }
+
+    .footer-note {
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      font-size: 7.5pt;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== PAGE 1 / 4 ==================== -->
+  <div class="page">
+    <div class="page-content">
+      <div class="cover-banner">
+        <div class="cover-badge-row">
+          <span class="cover-badge kakao">💬 오픈카톡 단톡방 연동</span>
+          <span class="cover-badge">📱 모바일 웹 (App 설치 불필요)</span>
+          <span class="cover-badge">⚡ 실시간 자동 집계 & 재고 차감</span>
+          <span class="cover-badge">☁️ GitHub + Vercel 무료 자동 배포</span>
+        </div>
+        <h1 class="cover-title">과일 가게 모바일 웹 주문 및<br/>오픈카톡 자동 집계 시스템 기획안</h1>
+        <p class="cover-subtitle">벤치마킹 모델(우리동네국민상회 홍제점) 분석 기반 · 비용 0원(Free Tier) 구축 및 지속 개선 설계서</p>
+        <div class="cover-meta-grid">
+          <div class="cover-meta-item">
+            <div class="label">벤치마킹 레퍼런스</div>
+            <div class="val">ourunit-cus.co.kr/hongje</div>
+          </div>
+          <div class="cover-meta-item">
+            <div class="label">타겟 플랫폼</div>
+            <div class="val">모바일 웹 (반응형 + PWA)</div>
+          </div>
+          <div class="cover-meta-item">
+            <div class="label">핵심 기술 스택</div>
+            <div class="val">Next.js · Supabase · Vercel</div>
+          </div>
+          <div class="cover-meta-item">
+            <div class="label">예상 서버 유지비용</div>
+            <div class="val">월 0원 (무료 티어 구성)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <span class="section-num">01</span>
+        <h2 class="section-title">프로젝트 배경 및 해결 과제</h2>
+      </div>
+
+      <div class="grid-3">
+        <div class="card orange">
+          <div class="card-title">🚨 기존 단톡방 수기 운영의 문제점</div>
+          <ul>
+            <li>단톡방에 일반 대화와 주문 채팅이 섞여 <strong>주문 누락·수량 착오</strong> 빈번 발생</li>
+            <li>한정 수량(예: 딸기 30팩) 초과 주문을 실시간으로 막기 어려움</li>
+            <li>사장님이 매일 밤 메모장/엑셀에 닉네임별로 일일이 수기 합산하는 피로도</li>
+          </ul>
+        </div>
+        <div class="card blue">
+          <div class="card-title">🎯 도입 후 핵심 개선 효과</div>
+          <ul>
+            <li><strong>3초 장바구니 주문</strong>: 앱 설치나 회원가입 없이 오픈카톡 닉네임만으로 주문</li>
+            <li><strong>100% 자동 집계</strong>: 품목별 총 주문량 & 손님별 받을 금액 자동 합산</li>
+            <li><strong>단톡방 활기 유지</strong>: 주문서 자동 복사 후 단톡방에 붙여넣기로 공구 열기 유지</li>
+          </ul>
+        </div>
+        <div class="card green">
+          <div class="card-title">💰 비용 0원 & 무중단 자동 배포</div>
+          <ul>
+            <li>복잡한 유료 쇼핑몰 수수료나 앱스토어 심사 비용 <strong>전액 0원</strong></li>
+            <li><strong>GitHub</strong>로 코드 버전을 안전하게 관리하고 <strong>Vercel</strong>로 1분 내 자동 배포</li>
+            <li>운영 중 필요한 기능을 언제든 즉시 추가·수정 가능한 확장형 구조</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <span class="section-num">02</span>
+        <h2 class="section-title">예시 사이트(ourunit-cus.co.kr/hongje) 분석 및 핵심 동작 원리</h2>
+      </div>
+
+      <div class="card soft" style="margin-bottom: 10px;">
+        <div class="card-title">
+          <span>🔍 예시 사이트 실제 코드 분석: "왜 웹에서 바로 단톡방 채팅을 쏘지 않고 클립보드 복사를 쓸까?"</span>
+          <span class="badge badge-blue">핵심 기술 분석</span>
+        </div>
+        <p>
+          카카오톡은 스팸 방지 및 보안 정책상 <strong>외부 웹사이트가 오픈채팅(단톡방)에 직접 메시지를 자동 전송(API Push)하거나 대화를 읽어오는 공식 API를 제공하지 않습니다.</strong><br/>
+          따라서 예시 사이트(<code>ourunit-cus.co.kr/hongje</code>) 역시 실제 소스코드를 분석해보면, 손님이 장바구니에서 <strong>[공구방으로 이동]</strong> 버튼을 누를 때 <code>navigator.clipboard.writeText("상품명 수량")</code>으로 <strong>주문 내역을 클립보드에 자동 복사</strong>한 뒤 오픈채팅방을 열어 손님이 <strong>붙여넣기 전송</strong>하도록 구현되어 있습니다.
+        </p>
+      </div>
+
+      <div class="flow-container">
+        <div style="font-weight: 800; font-size: 9.2pt; margin-bottom: 8px; color: var(--dark);">
+          🔄 전체 서비스 핵심 동작 흐름도 (판매자 과일 등록 ➜ 고객 장바구니 주문 ➜ 자동 집계 & 오픈카톡 연동)
+        </div>
+        <div class="flow-row">
+          <div class="flow-step">
+            <div class="step-num">STEP 1 · 판매자</div>
+            <div class="step-title">오늘의 과일 등록</div>
+            <div class="step-desc">관리자 웹에서 스마트폰으로 과일 사진·가격·한정수량(예: 30팩) 등록</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step highlight">
+            <div class="step-num">STEP 2 · 고객</div>
+            <div class="step-title">닉네임 입력 & 장바구니</div>
+            <div class="step-desc">단톡방 링크 접속 → 오픈카톡 닉네임 입력 → 과일 종류·수량 담기 후 [전송하기]</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step green-step">
+            <div class="step-num">STEP 3 · 자동 집계 서버</div>
+            <div class="step-title">DB 즉시 집계 & 알림</div>
+            <div class="step-desc">잔여수량 즉시 차감 · 품목별/닉네임별 자동 합산 · 사장님께 실시간 주문 알림</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step kakao-step">
+            <div class="step-num">STEP 4 · 오픈카톡방</div>
+            <div class="step-title">단톡방 주문서 공유</div>
+            <div class="step-desc">주문 내역이 자동 복사된 상태로 단톡방이 열려 붙여넣기 전송 (공구 열기 UP)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      <span>과일 가게 모바일 웹 주문 및 오픈카톡 자동 집계 시스템 기획안</span>
+      <span>Page 1 / 4</span>
+    </div>
+  </div>
+
+  <!-- ==================== PAGE 2 / 4 ==================== -->
+  <div class="page">
+    <div class="page-content">
+      <div class="section-header first">
+        <span class="section-num">03</span>
+        <h2 class="section-title">오픈카톡 연동 및 자동 집계 아키텍처 2가지 방안 비교</h2>
+      </div>
+      <p style="margin: 0 0 8px 0; font-size: 8.8pt; color: var(--text);">
+        지인분께서 <strong>24시간 켜두는 안드로이드 공기계(카톡 봇) 관리 부담 없이도 첫날부터 완벽하게 무료로 운영</strong>하실 수 있도록, 아래 두 가지 아키텍처를 비교하여 <strong>1단계(방안 A: 웹 직집계 하이브리드) 구축 후 필요시 2단계(방안 B: 카톡봇 파싱 추가)로 확장</strong>하는 전략을 제안합니다.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 17%;">비교 항목</th>
+            <th style="width: 44%; background: #E8F3FF; color: #0050CC;">★ 방안 A: 웹 즉시 DB 집계 + 오픈카톡 복사/이동 하이브리드 (강력 추천)</th>
+            <th style="width: 39%;">방안 B: 오픈카톡 공기계 봇 파싱 방식 (예시 사이트 원본 방식)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>동작 원리</strong></td>
+            <td>손님이 웹에서 <strong>[주문 전송하기]</strong> 클릭 시:<br/>① <strong>서버 DB에 즉시 주문 저장·자동 집계·재고 차감 완료</strong><br/>② 동시에 주문 텍스트 자동 복사 후 <strong>오픈카톡 단톡방 열기</strong></td>
+            <td>웹에서는 클립보드 복사 및 오픈카톡방 이동만 수행하고, 단톡방에 상주하는 <strong>안드로이드 공기계(메신저봇R 앱)</strong>가 채팅 알림을 읽어 서버로 전송</td>
+          </tr>
+          <tr>
+            <td><strong>집계 정확도 및 재고 차감</strong></td>
+            <td><strong>누락 0% (100% 정확)</strong> · 버튼 클릭 즉시 한정수량(잔여 개수) 실시간 차감 및 품절 자동 처리</td>
+            <td>손님이 카톡방에 붙여넣기를 깜빡하거나 임의로 글자를 수정하면 파싱 오류·누락 발생 가능</td>
+          </tr>
+          <tr>
+            <td><strong>사장님 실시간 알림</strong></td>
+            <td>주문 즉시 <strong>관리자 웹 대시보드 실시간 갱신 + 사장님 텔레그램/카톡 알림 즉시 발송</strong></td>
+            <td>공기계 봇이 채팅을 읽고 서버에 등록한 뒤 확인 가능</td>
+          </tr>
+          <tr>
+            <td><strong>추가 장비/유지보수</strong></td>
+            <td><strong>추가 공기계 불필요 (100% 클라우드 무료 운영)</strong> · 배터리 방전이나 카톡 업데이트로 봇이 멈출 걱정 없음</td>
+            <td>24시간 충전기·와이파이에 연결된 <strong>안드로이드 공기계 1대 상시 구동 필수</strong></td>
+          </tr>
+          <tr>
+            <td><strong>단톡방 활성화 효과</strong></td>
+            <td>손님이 카톡방으로 자동 이동해 복사된 주문서를 붙여넣으므로 <strong>단톡방 주문 인증 분위기 100% 동일</strong></td>
+            <td>단톡방에 주문 채팅이 올라옴</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="sub-title">📋 단톡방 자동 복사 주문서 포맷 & 사장님 공지 자동 생성 예시</div>
+      <div class="grid-2">
+        <div class="card soft">
+          <div class="card-title">
+            <span>💬 손님이 [전송하기] 클릭 시 클립보드 복사 양식</span>
+            <span class="badge badge-orange">고객 단톡방 붙여넣기용</span>
+          </div>
+          <div style="background:#fff; border:1px solid #ddd; border-radius:8px; padding:9px 11px; font-family:monospace; font-size:8.2pt; line-height:1.5; color:#191F28;">
+            <strong>[🍎 주문완료] 닉네임: 과일사랑</strong><br/>
+            • 특상품 설향 딸기(1팩) × 2개<br/>
+            • 고당도 타이벡 감귤(3kg) × 1박스<br/>
+            ──────────────<br/>
+            💰 합계: 40,800원 (예약 접수됨)
+          </div>
+          <p style="margin-top:6px; font-size:8pt; color:var(--muted);">
+            * 손님이 웹에서 전송을 누른 순간 이미 관리자 장부에는 집계되어 있으며, 단톡방에 붙여넣어 다른 회원들의 구매 욕구를 자극합니다.
+          </p>
+        </div>
+
+        <div class="card soft">
+          <div class="card-title">
+            <span>📢 사장님이 [공지 복사] 클릭 시 자동 생성 양식</span>
+            <span class="badge badge-green">사장님 단톡방 공지용</span>
+          </div>
+          <div style="background:#fff; border:1px solid #ddd; border-radius:8px; padding:9px 11px; font-family:monospace; font-size:8.2pt; line-height:1.5; color:#191F28;">
+            <strong>📢 [11/07(토) 오늘의 신선 과일 라인업]</strong><br/>
+            🍓 설향 딸기(1팩) : 12,900원 (한정 30팩)<br/>
+            🍇 김천 샤인머스켓(2수) : 19,000원 (한정 20박스)<br/>
+            🍊 타이벡 감귤(3kg) : 15,000원<br/>
+            ──────────────<br/>
+            👉 <strong>지금 바로 장바구니 주문 & 내 예약 확인:</strong><br/>
+            https://our-fruit-store.vercel.app
+          </div>
+          <p style="margin-top:6px; font-size:8pt; color:var(--muted);">
+            * 사장님이 일일이 카톡 공지글을 타이핑할 필요 없이, 관리자 페이지에 올린 과일 목록이 원터치로 공지 문구로 변환됩니다.
+          </p>
+        </div>
+      </div>
+
+      <div class="sub-title" style="margin-top: 12px;">💡 향후 공기계 카톡봇(방안 B)까지 결합할 경우의 양방향 아키텍처</div>
+      <div class="card blue">
+        <div class="card-title">
+          <span>웹 주문(방안 A) + 단톡방 직접 채팅 주문(방안 B) 통합 처리 구조</span>
+          <span class="badge badge-blue">확장성 보장</span>
+        </div>
+        <p>
+          어르신 손님 중 웹 링크 접속 대신 단톡방에 그냥 <code>"딸기 2팩이요"</code>라고만 치시는 분들을 위해, 추후 안드로이드 공기계(메신저봇R)를 연결할 수 있는 <strong>Webhook API(<code>POST /api/webhook/kakao</code>)</strong>를 함께 설계합니다. 웹에서 주문하든 카톡방에 직접 채팅을 치든 <strong>하나의 관리자 대시보드에서 중복 없이 통합 집계</strong>됩니다.
+        </p>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      <span>과일 가게 모바일 웹 주문 및 오픈카톡 자동 집계 시스템 기획안</span>
+      <span>Page 2 / 4</span>
+    </div>
+  </div>
+
+  <!-- ==================== PAGE 3 / 4 ==================== -->
+  <div class="page">
+    <div class="page-content">
+      <div class="section-header first">
+        <span class="section-num">04</span>
+        <h2 class="section-title">모바일 화면 설계 (UI/UX 와이어프레임 모형)</h2>
+      </div>
+      <p style="margin: 0 0 6px 0; font-size: 8.6pt; color: var(--text);">
+        예시 사이트(<code>ourunit-cus.co.kr/hongje</code>)의 직관적인 토스(Toss) 스타일 카드 UI를 계승하면서, 주문 시 <strong>오픈카톡 닉네임 연동</strong>과 <strong>판매자 스마트폰 관리 기능</strong>을 대폭 강화한 3대 핵심 화면입니다.
+      </p>
+
+      <div class="mockup-grid">
+        <!-- Phone 1: Customer Main -->
+        <div class="phone-frame">
+          <div class="phone-header">
+            <span>🍎 우리동네 과일가게</span>
+            <span style="font-size: 6.8pt; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">예약·주문</span>
+          </div>
+          <div class="phone-body">
+            <div class="mock-box" style="background: #FFF4E5; border-color: #FFD9A8; color: #B25E00; font-size: 7pt;">
+              <strong>📢 오늘의 공지</strong><br/>
+              오후 7시까지 매장 픽업 가능! 당도 보장 설향 딸기 첫 입고되었습니다.
+            </div>
+            <div class="mock-box">
+              <div style="font-weight: 800; margin-bottom: 4px;">📌 내 예약/수령 확인</div>
+              <div style="display:flex; gap:4px;">
+                <div style="flex:1; border:1px solid #ccc; border-radius:5px; padding:3px 6px; color:#333; background:#F9FAFB;">과일사랑 (자동저장됨)</div>
+                <div style="background:var(--primary); color:#fff; padding:3px 8px; border-radius:5px; font-weight:700;">조회</div>
+              </div>
+              <div style="margin-top:5px; padding-top:5px; border-top:1px dashed #eee; display:flex; justify-content:space-between; align-items:center;">
+                <span>설향 딸기(500g) X 2</span>
+                <span class="badge badge-green">✅ 입고완료</span>
+              </div>
+            </div>
+            <div class="mock-tabs">
+              <span class="mock-tab active">오늘의 과일 (11/07)</span>
+              <span class="mock-tab">🎁 특가 세트</span>
+              <span class="mock-tab">매장 구비</span>
+            </div>
+            <div class="mock-box">
+              <div class="mock-prod">
+                <div class="mock-thumb">🍓</div>
+                <div style="flex:1;">
+                  <div style="font-weight:800;">특상품 설향 딸기 (1팩)</div>
+                  <div style="color:var(--primary); font-weight:800;">12,900원</div>
+                  <div style="font-size:6.8pt; color:var(--orange); font-weight:700;">🔥 한정판매 · 잔여 8팩</div>
+                </div>
+              </div>
+              <div class="mock-btn-row">
+                <div class="mock-btn" style="background:#E8F3FF; color:var(--primary);">바로 주문</div>
+                <div class="mock-btn" style="background:#E8F8F0; color:var(--green);">+ 장바구니</div>
+              </div>
+            </div>
+            <div class="mock-box">
+              <div class="mock-prod">
+                <div class="mock-thumb" style="background:#F0FDF4;">🍇</div>
+                <div style="flex:1;">
+                  <div style="font-weight:800;">김천 샤인머스켓 2수 (1박스)</div>
+                  <div style="color:var(--primary); font-weight:800;">19,000원</div>
+                  <div style="font-size:6.8pt; color:var(--danger); font-weight:700;">❌ 오늘 준비 수량 품절</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone 2: Cart & Open Kakao Modal -->
+        <div class="phone-frame">
+          <div class="phone-header">
+            <span>🛒 장바구니 & 주문 전송</span>
+            <span style="font-size: 6.8pt;">단계 2/2</span>
+          </div>
+          <div class="phone-body">
+            <div class="mock-box" style="border-color: var(--primary);">
+              <div style="font-weight:800; margin-bottom:3px; color:var(--primary);">👤 오픈카톡 닉네임 (필수)</div>
+              <div style="border:1.5px solid var(--primary); border-radius:5px; padding:4px 7px; font-weight:700;">
+                과일사랑
+              </div>
+              <div style="font-size:6.5pt; color:var(--muted); margin-top:3px;">
+                * 단톡방 닉네임과 동일하게 입력해주세요. (기기 자동 저장)
+              </div>
+            </div>
+
+            <div class="mock-box">
+              <div style="font-weight:800; margin-bottom:5px;">담은 과일 목록 (2종)</div>
+              <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:5px; border-bottom:1px solid #eee;">
+                <div>
+                  <div style="font-weight:700;">설향 딸기 (1팩)</div>
+                  <div style="font-size:6.8pt; color:var(--muted);">12,900원 × 2개</div>
+                </div>
+                <div style="display:flex; gap:4px; align-items:center;">
+                  <span style="border:1px solid #ccc; padding:0 5px; border-radius:4px;">-</span>
+                  <strong>2</strong>
+                  <span style="border:1px solid #ccc; padding:0 5px; border-radius:4px;">+</span>
+                </div>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; padding-top:5px;">
+                <div>
+                  <div style="font-weight:700;">고당도 타이벡 감귤 (3kg)</div>
+                  <div style="font-size:6.8pt; color:var(--muted);">15,000원 × 1박스</div>
+                </div>
+                <div style="display:flex; gap:4px; align-items:center;">
+                  <span style="border:1px solid #ccc; padding:0 5px; border-radius:4px;">-</span>
+                  <strong>1</strong>
+                  <span style="border:1px solid #ccc; padding:0 5px; border-radius:4px;">+</span>
+                </div>
+              </div>
+              <div style="margin-top:6px; padding-top:5px; border-top:1.5px solid #191F28; display:flex; justify-content:space-between; font-weight:800; font-size:8.5pt;">
+                <span>총 예상 금액</span>
+                <span style="color:var(--green);">40,800원</span>
+              </div>
+            </div>
+
+            <div class="mock-box" style="background:#FFFBE6; border-color:#F5D000; text-align:center;">
+              <div style="font-size:6.8pt; margin-bottom:5px; color:#333;">
+                버튼 클릭 시 <strong>서버에 즉시 자동 집계</strong>되며,<br/>주문서가 복사된 채로 <strong>오픈카톡 단톡방</strong>이 열립니다!
+              </div>
+              <div style="background:var(--kakao); color:var(--kakao-text); font-weight:800; padding:7px; border-radius:7px; font-size:8pt;">
+                💬 주문 전송 & 단톡방으로 이동
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone 3: Seller Admin Dashboard -->
+        <div class="phone-frame">
+          <div class="phone-header" style="background:#0F172A;">
+            <span>🛠️ 사장님 관리자 (/admin)</span>
+            <span style="font-size: 6.8pt; background:#03B26C; padding: 2px 6px; border-radius: 4px;">실시간 집계중</span>
+          </div>
+          <div class="phone-body">
+            <div class="mock-tabs">
+              <span class="mock-tab active">📊 실시간 주문집계</span>
+              <span class="mock-tab">📸 과일 등록/수정</span>
+              <span class="mock-tab">⚙️ 설정</span>
+            </div>
+
+            <div class="mock-box" style="background:#E8F3FF; border-color:#B8D8FF;">
+              <div style="font-weight:800; margin-bottom:3px; color:#0050CC;">📦 오늘 품목별 총 주문 합계 (소분용)</div>
+              <div style="display:flex; justify-content:space-between; font-size:7.2pt; margin-bottom:2px;">
+                <span>🍓 설향 딸기 (1팩)</span>
+                <strong>주문 22팩 / 잔여 8팩</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:7.2pt; margin-bottom:2px;">
+                <span>🍇 샤인머스켓 (1박스)</span>
+                <strong style="color:var(--danger);">주문 20박스 / 품절</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:7.2pt;">
+                <span>🍊 타이벡 감귤 (3kg)</span>
+                <strong>주문 14박스 / 잔여 16</strong>
+              </div>
+            </div>
+
+            <div class="mock-box">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+                <strong>👤 과일사랑 (40,800원)</strong>
+                <span class="badge badge-blue">방금 주문</span>
+              </div>
+              <div style="font-size:7pt; color:var(--text); margin-bottom:5px;">
+                • 설향 딸기 X 2팩 (25,800원)<br/>
+                • 타이벡 감귤 X 1박스 (15,000원)
+              </div>
+              <div class="mock-btn-row">
+                <div class="mock-btn" style="background:var(--green); color:#fff;">✅ 입고완료 체크</div>
+                <div class="mock-btn" style="background:var(--primary); color:#fff;">🎁 수령완료 처리</div>
+              </div>
+            </div>
+
+            <div class="mock-box" style="text-align:center; background:#191F28; color:#fff; font-weight:700; padding:6px;">
+              📸 + 오늘의 새 과일 사진 찍어 올리기
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <span class="section-num">05</span>
+        <h2 class="section-title">고객용 & 판매자(관리자)용 상세 기능 명세</h2>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>🙋‍♀️ 고객용 모바일 웹 주요 기능</span>
+            <span class="badge badge-blue">Customer Web</span>
+          </div>
+          <ul>
+            <li><strong>오픈카톡 닉네임 자동 기억 (LocalStorage)</strong>: 최초 1회만 입력하면 다음 접속 시 자동으로 내 닉네임과 내 예약 현황이 상단에 표시됨</li>
+            <li><strong>날짜별/특가별 탭 & 실시간 검색</strong>: <code>오늘의 과일</code>, <code>내일 예약</code>, <code>🎁 세트 특가</code>, <code>매장 상시 구비</code> 탭 분리 및 초성/이름 검색</li>
+            <li><strong>다중 사진 슬라이더 상세 모달</strong>: 과일 카드를 터치하면 실제 촬영한 여러 장의 과일 사진과 당도·산지 설명 확인</li>
+            <li><strong>실시간 재고 연동 장바구니</strong>: 남은 수량(예: 잔여 3팩)보다 많은 수량은 담을 수 없도록 제어하여 초과 주문 원천 방지</li>
+            <li><strong>원클릭 주문 전송 & 단톡방 이동</strong>: DB 저장 + 주문서 클립보드 자동 복사 + 오픈카톡 단톡방 실행을 버튼 하나로 처리</li>
+            <li><strong>입고 여부 실시간 배지</strong>: 내가 주문한 과일이 매장에 도착했는지(<code>✅ 입고완료</code> / <code>❌ 미입고</code>) 웹에서 즉시 확인</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>👨‍🌾 판매자(사장님) 관리자 페이지 주요 기능</span>
+            <span class="badge badge-green">Seller Admin</span>
+          </div>
+          <ul>
+            <li><strong>스마트폰 30초 과일 업로드</strong>: 새벽 시장에서 휴대폰 카메라로 바로 찍어 올리면 <strong>브라우저에서 이미지를 자동 압축(WebP)</strong>하여 초고속 등록</li>
+            <li><strong>어제/기존 과일 원터치 재등록</strong>: 매일 반복 판매하는 과일(딸기, 사과, 바나나 등)은 기존 템플릿을 불러와 <strong>오늘 가격과 수량만 수정</strong>해 5초 만에 게시</li>
+            <li><strong>한정 수량 & 원터치 품절 토글</strong>: 준비한 박스 수량만 입력하면 주문 시마다 자동 차감되며, 오프라인 매장 판매분 발생 시 <code>[+ / -]</code> 버튼으로 재고 즉시 조정</li>
+            <li><strong>품목별 소분 요약표 & 닉네임별 장부 자동 생성</strong>: 오늘 총 몇 팩을 포장해야 하는지, 손님별로 얼마를 받아야 하는지 자동 합산</li>
+            <li><strong>단톡방 공지글 자동 생성기</strong>: <code>[📢 오늘의 과일 공지 복사]</code> 버튼을 누르면 오늘 올린 과일 목록+가격+주문링크가 이모지와 함께 깔끔하게 복사됨</li>
+            <li><strong>사장님 실시간 주문 알림 (무료)</strong>: 신규 주문이 들어올 때마다 사장님 텔레그램/카카오톡으로 즉시 푸시 알림 전송</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      <span>과일 가게 모바일 웹 주문 및 오픈카톡 자동 집계 시스템 기획안</span>
+      <span>Page 3 / 4</span>
+    </div>
+  </div>
+
+  <!-- ==================== PAGE 4 / 4 ==================== -->
+  <div class="page">
+    <div class="page-content">
+      <div class="section-header first">
+        <span class="section-num">06</span>
+        <h2 class="section-title">기술 스택 선정 및 무료 티어(Free Tier) 비용 설계</h2>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 18%;">영역</th>
+            <th style="width: 25%;">채택 기술 / 서비스</th>
+            <th style="width: 37%;">선정 이유 및 과일 가게 맞춤 장점</th>
+            <th style="width: 20%;">무료 티어 한도 (월 비용)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>프론트엔드 & API</strong></td>
+            <td><strong>Next.js (App Router) + TypeScript + Tailwind</strong></td>
+            <td>고객용 웹페이지, 관리자 대시보드, 백엔드 API를 하나의 코드베이스로 관리하여 개발 속도와 유지보수성 극대화</td>
+            <td>오픈소스 (<strong>0원</strong>)</td>
+          </tr>
+          <tr>
+            <td><strong>데이터베이스 (DB)</strong></td>
+            <td><strong>Supabase (PostgreSQL)</strong></td>
+            <td>실시간(Realtime) 데이터 구독을 지원하여 손님이 주문하는 즉시 사장님 관리자 화면에 새로고침 없이 주문 카드가 뜸</td>
+            <td>500MB 무료 제공<br/>(주문 약 50만 건 / <strong>0원</strong>)</td>
+          </tr>
+          <tr>
+            <td><strong>과일 사진 저장소</strong></td>
+            <td><strong>Supabase Storage + 자동 이미지 압축</strong></td>
+            <td>휴대폰 원본 사진(5~10MB)을 업로드 시 100KB대의 고화질 WebP로 자동 변환·저장하여 로딩 속도 향상 및 용량 절약</td>
+            <td>1GB 무료 제공<br/>(사진 약 7,000장 / <strong>0원</strong>)</td>
+          </tr>
+          <tr>
+            <td><strong>웹 호스팅 & 배포</strong></td>
+            <td><strong>Vercel (Hobby Free Tier)</strong></td>
+            <td>전 세계 CDN 속도 최적화, 무료 보안 연결(HTTPS), GitHub 연동 시 코드 수정 후 1분 내 무중단 자동 배포</td>
+            <td>월 100GB 트래픽 무료<br/>(<strong>월 0원</strong>)</td>
+          </tr>
+          <tr>
+            <td><strong>버전 관리</strong></td>
+            <td><strong>GitHub</strong></td>
+            <td>모든 코드 변경 이력 보관, 브랜치 기반 안전한 기능 추가 및 언제든 이전 버전 복구 가능</td>
+            <td>무료 (<strong>0원</strong>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="section-header">
+        <span class="section-num">07</span>
+        <h2 class="section-title">핵심 데이터베이스(DB) 스키마 설계</h2>
+      </div>
+
+      <div class="grid-2">
+        <div class="card soft">
+          <div class="card-title">1️⃣ products (일별 판매 과일 테이블)</div>
+          <ul>
+            <li><code>id</code> (UUID, PK) / <code>sale_date</code> (판매·수령 날짜, 예: <code>2026-11-07</code>)</li>
+            <li><code>name</code> (과일명) / <code>unit_label</code> (판매 단위: 1팩, 1박스, 세트)</li>
+            <li><code>price</code> (판매가) / <code>description</code> (당도·산지 코멘트)</li>
+            <li><code>images</code> (과일 사진 URL 배열) / <code>special_tab</code> (특가 탭 구분)</li>
+            <li><code>is_limited</code> (한정수량 여부) / <code>remain_stock</code> (실시간 잔여 수량)</li>
+            <li><code>is_received</code> (매장 입고 완료 여부) / <code>is_visible</code> (노출 여부)</li>
+          </ul>
+        </div>
+        <div class="card soft">
+          <div class="card-title">2️⃣ orders & order_items (주문 및 상세 품목 테이블)</div>
+          <ul>
+            <li><code>orders.id</code> (UUID) / <code>order_date</code> (주문일)</li>
+            <li><code>kakao_nickname</code> (<strong>오픈카톡 닉네임</strong> - 조회 및 그룹핑 기준 키)</li>
+            <li><code>total_amount</code> (총 합계 금액) / <code>status</code> (예약중 · 수령완료 · 취소)</li>
+            <li><code>source</code> (<code>WEB</code> 웹 직접 주문 / <code>KAKAO_BOT</code> 카톡봇 파싱 주문)</li>
+            <li><code>order_items</code>: <code>product_id</code>, <code>product_name</code>, <code>quantity</code>(수량), <code>unit_price</code>(단가)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-header">
+        <span class="section-num">08</span>
+        <h2 class="section-title">GitHub + Vercel 자동 배포 파이프라인 및 단계별 로드맵</h2>
+      </div>
+
+      <div class="flow-container" style="margin-bottom: 10px;">
+        <div class="flow-row">
+          <div class="flow-step">
+            <div class="step-num">1. 기능 개선 작업</div>
+            <div class="step-title">로컬 코드 수정</div>
+            <div class="step-desc">새로운 기능(단골 쿠폰, UI 개선)을 <code>feat/*</code> 브랜치에서 개발</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step highlight">
+            <div class="step-num">2. 버전 기록</div>
+            <div class="step-title">GitHub Push & PR</div>
+            <div class="step-desc">GitHub 저장소에 코드 푸시 (변경 내역 백업 및 버전 이력 보존)</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step">
+            <div class="step-num">3. 사전 검증</div>
+            <div class="step-title">Vercel Preview URL</div>
+            <div class="step-desc">운영 사이트에 영향 없는 <strong>테스트용 웹 주소</strong> 자동 생성·모바일 확인</div>
+          </div>
+          <div class="flow-arrow">➜</div>
+          <div class="flow-step green-step">
+            <div class="step-num">4. 실제 반영</div>
+            <div class="step-title">Main 병합 & 자동 배포</div>
+            <div class="step-desc"><code>main</code> 브랜치 병합 즉시 <strong>30초 만에 실제 가게 사이트 무중단 배포</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="card blue">
+          <div class="card-title"><span>🚀 Phase 1: MVP 오픈 (1~2주)</span></div>
+          <ul>
+            <li>고객용: 오늘의 과일 목록, 날짜 탭, 장바구니, 닉네임 기억, 주문 전송 & 단톡방 이동, 내 예약 조회</li>
+            <li>관리자용: 스마트폰 과일 사진/수량 등록, 실시간 품목별·닉네임별 자동 집계표, 입고/수령 체크</li>
+            <li>GitHub + Vercel + Supabase 무료 배포 완료</li>
+          </ul>
+        </div>
+        <div class="card green">
+          <div class="card-title"><span>🤖 Phase 2: 자동화 고도화 (선택)</span></div>
+          <ul>
+            <li>신규 주문 시 사장님 <strong>텔레그램/카톡 실시간 알림봇</strong> 연동</li>
+            <li>단톡방에 직접 채팅으로만 주문하는 손님도 자동 인식하는 <strong>안드로이드 메신저봇R 웹훅 연동</strong></li>
+            <li>묶음 할인 세트 상품 및 엑셀 매출 정산표 다운로드</li>
+          </ul>
+        </div>
+        <div class="card orange">
+          <div class="card-title"><span>💎 Phase 3: 단골 확대 & 브랜딩</span></div>
+          <ul>
+            <li><strong>PWA 홈 화면 바로가기 설치</strong>: 스마트폰 바탕화면에 가게 전용 아이콘 생성</li>
+            <li>오픈카톡 닉네임 기반 <strong>단골 스탬프 / 적립금</strong> 시스템</li>
+            <li>요일별·과일별 판매량 통계 분석으로 새벽 시장 적정 사입량 추천</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      <span>과일 가게 모바일 웹 주문 및 오픈카톡 자동 집계 시스템 기획안</span>
+      <span>Page 4 / 4</span>
+    </div>
+  </div>
+
+</body>
+</html>
