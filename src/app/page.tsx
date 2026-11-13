@@ -335,10 +335,10 @@ export default function HongjeStyleCustomerPage() {
         <div className="w-[95%] max-w-[800px] mx-auto px-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <h1 className="text-base sm:text-lg font-bold tracking-tight text-white m-0">
-              {settings?.store_name || "우리동네국민상회"}
+              {settings?.store_name || "후르츠파머 유천점"}
             </h1>
             <span className="inline-block bg-white/10 text-white border border-white/20 rounded-[10px] px-2.5 py-0.5 text-xs font-semibold">
-              {settings?.branch_code || "hongje"}
+              {settings?.branch_code || "유천점"}
             </span>
           </div>
           <span className="text-xs sm:text-sm font-semibold text-white/70">

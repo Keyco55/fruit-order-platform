@@ -30,13 +30,13 @@ export function createInitialSeedData(): StoreDatabase {
 
   const settings: StoreSettings = {
     id: "store-main",
-    branch_code: "main",
-    store_name: "우리동네 과일가게",
-    subtitle: "매일 새벽 가락시장 경매 1등품 직송",
+    branch_code: "yucheon",
+    store_name: "후르츠파머 유천점",
+    subtitle: "매일 새벽 경매 1등품 직송 신선 과일",
     notice_text:
       "🍓 오늘 주문건은 오후 2시 이후 매장 픽업 가능합니다. 주문 후 오픈카톡방에 복사된 주문서를 꼭 붙여넣어 주세요!",
     pickup_guide: "매일 10:00 ~ 20:30 (매장 앞 잠시 정차 픽업 가능)",
-    bank_account: "카카오뱅크 3333-01-2345678 (예금주: 우리동네청과)",
+    bank_account: "카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)",
     kakao_openchat_url: "https://open.kakao.com",
     admin_pin: "1234",
     show_price: true,

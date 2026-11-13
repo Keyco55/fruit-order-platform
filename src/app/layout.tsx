@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "우리동네 과일가게 📌내 예약조회",
+  title: "후르츠파머 유천점 📌내 예약조회",
   description:
     "앱 설치 없이 오픈카톡 닉네임만으로 간편하게 구매 및 내 예약을 확인하세요.",
 };

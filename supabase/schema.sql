@@ -7,12 +7,12 @@ create extension if not exists "pgcrypto";
 -- 1. 매장 기본 설정 (store_settings)
 create table if not exists public.store_settings (
   id uuid primary key default gen_random_uuid(),
-  branch_code text not null unique default 'main',
-  store_name text not null default '우리동네 과일가게',
-  subtitle text not null default '매일 새벽 가락시장 경매 직송 신선 과일',
+  branch_code text not null unique default 'yucheon',
+  store_name text not null default '후르츠파머 유천점',
+  subtitle text not null default '매일 새벽 경매 직송 신선 과일',
   notice_text text not null default '🍓 오늘 주문건은 오후 2시 이후 매장 픽업 가능합니다. 오픈카톡방에 주문서를 붙여넣어 주세요!',
   pickup_guide text not null default '영업시간: 10:00 ~ 20:30 (매장 앞 정차 픽업 가능)',
-  bank_account text not null default '카카오뱅크 3333-01-2345678 (예금주: 우리동네청과)',
+  bank_account text not null default '카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)',
   kakao_openchat_url text not null default 'https://open.kakao.com/o/gFruitDemo',
   admin_pin text not null default '1234',
   show_price boolean not null default true,

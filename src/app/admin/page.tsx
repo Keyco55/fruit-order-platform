@@ -476,7 +476,7 @@ export default function AdminDashboardPage() {
                 👨‍🌾 사장님 모바일 관리 센터
               </span>
               <h1 className="text-xl font-black text-slate-900 mt-1">
-                {settings?.store_name || "우리동네 과일가게"} 실시간 장부
+                {settings?.store_name || "후르츠파머 유천점"} 실시간 장부
               </h1>
             </div>
 
