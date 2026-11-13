@@ -1,21 +1,42 @@
 @import "tailwindcss";
 
-@layer base {
-  :root {
-    --font-sans: "Pretendard Variable", Pretendard, -apple-system,
-      BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI",
-      "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
-  }
-
-  body {
-    font-family: var(--font-sans);
-    background-color: #f4f6f8;
-    color: #191f28;
-    -webkit-font-smoothing: antialiased;
-  }
+:root {
+  --toss-blue: #0064FF;
+  --toss-blue-hover: #0052D1;
+  --toss-blue-soft: #E8F3FF;
+  --toss-blue-text: #1B64DA;
+  --toss-bg: #F2F4F6;
+  --toss-card: #FFFFFF;
+  --toss-input: #F2F4F6;
+  --toss-header: #191F28;
+  --toss-text: #191F28;
+  --toss-text-secondary: #8B95A1;
+  --toss-text-muted: #B0B8C1;
+  --toss-border: #E5E8EB;
+  --toss-danger: #F04452;
+  --toss-danger-soft: #FFEBEE;
+  --toss-warning: #FF8A00;
+  --toss-warning-soft: #FFF4E5;
+  --toss-success: #03B26C;
+  --toss-success-soft: #E8F8F0;
+  --toss-radius-sm: 10px;
+  --toss-radius-md: 12px;
+  --toss-radius-lg: 14px;
+  --toss-radius-card: 16px;
+  --toss-font: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --toss-shadow: 0 4px 24px rgba(25, 31, 40, 0.07);
 }
 
-/* 가로 스크롤바 숨김 유틸리티 */
+body {
+  font-family: var(--toss-font);
+  margin: 0;
+  background-color: var(--toss-bg);
+  color: var(--toss-text);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* 가로 스크롤바 숨김 */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
