@@ -14,7 +14,7 @@ create table if not exists public.store_settings (
   pickup_guide text not null default '영업시간: 10:00 ~ 20:30 (매장 앞 정차 픽업 가능)',
   bank_account text not null default '카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)',
   kakao_openchat_url text not null default 'https://open.kakao.com/o/g7mQI5Wi',
-  admin_pin text not null default '1234',
+  admin_pin text not null default '@112233',
   show_price boolean not null default true,
   show_stock boolean not null default true,
   updated_at timestamptz not null default now()

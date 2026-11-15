@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAdminRequestAuthenticated } from "@/lib/admin-auth";
 import {
   createProductAdmin,
   deleteProductAdmin,
@@ -11,6 +12,13 @@ import type { CreateProductInput, Product } from "@/types/domain";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
+  if (!isAdminRequestAuthenticated(request)) {
+    return NextResponse.json(
+      { error: "관리자 인증이 필요합니다." },
+      { status: 401 }
+    );
+  }
+
   try {
     const body = (await request.json()) as CreateProductInput;
     if (!body.name || !body.name.trim()) {
@@ -42,6 +50,13 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  if (!isAdminRequestAuthenticated(request)) {
+    return NextResponse.json(
+      { error: "관리자 인증이 필요합니다." },
+      { status: 401 }
+    );
+  }
+
   try {
     const body = (await request.json()) as {
       id: string;
@@ -74,6 +89,13 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  if (!isAdminRequestAuthenticated(request)) {
+    return NextResponse.json(
+      { error: "관리자 인증이 필요합니다." },
+      { status: 401 }
+    );
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");

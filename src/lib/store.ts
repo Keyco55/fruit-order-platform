@@ -44,7 +44,7 @@ export function createInitialSeedData(): StoreDatabase {
     bank_account: "카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)",
     kakao_openchat_url:
       process.env.NEXT_PUBLIC_KAKAO_OPENCHAT_URL || "https://open.kakao.com/o/g7mQI5Wi",
-    admin_pin: "1234",
+    admin_pin: "@112233",
     show_price: true,
     show_stock: true,
     updated_at: nowIso,

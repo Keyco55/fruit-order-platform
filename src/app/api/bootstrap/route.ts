@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAdminRequestAuthenticated } from "@/lib/admin-auth";
 import {
   getDataSourceMode,
   getOrders,
@@ -13,6 +14,14 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const isAdmin = searchParams.get("admin") === "1";
+
+    if (isAdmin && !isAdminRequestAuthenticated(request)) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 }
+      );
+    }
+
     const nickname = searchParams.get("nickname") ?? undefined;
     const phone = searchParams.get("phone") ?? undefined;
     const phoneLast4 = searchParams.get("phoneLast4") ?? undefined;
