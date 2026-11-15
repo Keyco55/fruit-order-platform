@@ -64,17 +64,23 @@ export function formatOrderClipboardText(order: Order): string {
   const phoneSuffix = order.customer_phone_last4
     ? ` (${order.customer_phone_last4})`
     : "";
+  const fulfillmentLabel =
+    order.fulfillment_type === "DELIVERY" ? "🚚 배송" : "🏬 매장 픽업";
+
   const lines: string[] = [
-    `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix}`,
+    `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix} | ${fulfillmentLabel}`,
     ...order.items.map(
       (item) => `- ${item.product_name} (${item.unit_label}) x ${item.quantity}`
     ),
     `총 금액: ${formatKRW(order.total_amount)}`,
   ];
 
-  if (order.pickup_time && order.pickup_time.trim()) {
+  if (order.fulfillment_type === "DELIVERY" && order.delivery_address?.trim()) {
+    lines.push(`배송지: ${order.delivery_address.trim()}`);
+  } else if (order.pickup_time && order.pickup_time.trim()) {
     lines.push(`픽업예정: ${order.pickup_time.trim()}`);
   }
+
   if (order.memo && order.memo.trim()) {
     lines.push(`요청사항: ${order.memo.trim()}`);
   }
@@ -91,9 +97,8 @@ export function formatKakaoNoticeText(
   siteOrigin = "https://fruit-order-platform.vercel.app"
 ): string {
   const visibleProducts = products.filter((p) => p.is_visible);
-  const todayList = visibleProducts.filter((p) => p.category === "TODAY");
-  const reserveList = visibleProducts.filter((p) => p.category === "RESERVE");
-  const giftList = visibleProducts.filter((p) => p.category === "GIFT_SET");
+  const pickupList = visibleProducts.filter((p) => p.category === "PICKUP");
+  const deliveryList = visibleProducts.filter((p) => p.category === "DELIVERY");
 
   const formatLine = (p: Product) => {
     const stockTag =
@@ -112,21 +117,15 @@ export function formatKakaoNoticeText(
     "",
   ];
 
-  if (todayList.length > 0) {
-    sections.push("✨ [오늘의 경매 직송 과일]");
-    sections.push(...todayList.map(formatLine));
+  if (pickupList.length > 0) {
+    sections.push("🏬 [매장 픽업 상품]");
+    sections.push(...pickupList.map(formatLine));
     sections.push("");
   }
 
-  if (reserveList.length > 0) {
-    sections.push("📦 [내일 입고 사전예약 특가]");
-    sections.push(...reserveList.map(formatLine));
-    sections.push("");
-  }
-
-  if (giftList.length > 0) {
-    sections.push("🎁 [실속 묶음 / 선물세트]");
-    sections.push(...giftList.map(formatLine));
+  if (deliveryList.length > 0) {
+    sections.push("🚚 [배송 가능 상품]");
+    sections.push(...deliveryList.map(formatLine));
     sections.push("");
   }
 
@@ -148,7 +147,9 @@ export function ordersToCsv(orders: Order[]): string {
     "주문일",
     "주문시각",
     "오픈카톡닉네임",
-    "연락처뒷4자리",
+    "연락처",
+    "수령방식",
+    "배송지",
     "주문품목내역",
     "총결제금액",
     "결제확인",
@@ -184,7 +185,9 @@ export function ordersToCsv(orders: Order[]): string {
       o.order_date,
       timeStr,
       o.kakao_nickname,
-      o.customer_phone_last4 || "-",
+      o.customer_phone || o.customer_phone_last4 || "-",
+      o.fulfillment_type === "DELIVERY" ? "배송" : "픽업",
+      o.delivery_address || "-",
       itemsSummary,
       o.total_amount,
       o.is_paid ? "결제완료" : "미결제",

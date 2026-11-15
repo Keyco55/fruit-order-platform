@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const isAdmin = searchParams.get("admin") === "1";
   const nickname = searchParams.get("nickname") ?? undefined;
+  const phone = searchParams.get("phone") ?? undefined;
   const phoneLast4 = searchParams.get("phoneLast4") ?? undefined;
 
   const settings = getStoreSettings();
@@ -28,9 +29,10 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const myOrders = nickname
-    ? getOrders({ nickname, phoneLast4, includeCanceled: true })
-    : [];
+  const myOrders =
+    nickname || phone || phoneLast4
+      ? getOrders({ nickname, phone, phoneLast4, includeCanceled: true })
+      : [];
 
   const { admin_pin: _pin, ...publicSettings } = settings;
 

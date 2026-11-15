@@ -42,7 +42,14 @@ import type {
 } from "@/types/domain";
 
 type AdminTab = "DASHBOARD" | "PRODUCTS" | "SETTINGS";
-type OrderFilterStatus = "ALL" | "WAITING" | "READY" | "PICKED_UP" | "UNPAID";
+type OrderFilterStatus =
+  | "ALL"
+  | "PICKUP"
+  | "DELIVERY"
+  | "WAITING"
+  | "READY"
+  | "PICKED_UP"
+  | "UNPAID";
 
 const QUICK_FRUIT_PRESETS = [
   {
@@ -119,7 +126,7 @@ export default function AdminDashboardPage() {
   const [botReply, setBotReply] = useState<string | null>(null);
 
   // 과일 30초 등록 폼 상태
-  const [prodCategory, setProdCategory] = useState<ProductCategory>("TODAY");
+  const [prodCategory, setProdCategory] = useState<ProductCategory>("PICKUP");
   const [prodName, setProdName] = useState("");
   const [prodUnit, setProdUnit] = useState("500g 1팩");
   const [prodPrice, setProdPrice] = useState("12900");
@@ -390,6 +397,10 @@ export default function AdminDashboardPage() {
   // 고객 주문 검색 및 필터링
   const filteredOrders = useMemo(() => {
     return orders.filter((o) => {
+      if (orderFilter === "PICKUP" && o.fulfillment_type !== "PICKUP")
+        return false;
+      if (orderFilter === "DELIVERY" && o.fulfillment_type !== "DELIVERY")
+        return false;
       if (orderFilter === "WAITING" && o.status !== "RESERVED") return false;
       if (orderFilter === "READY" && o.status !== "READY") return false;
       if (orderFilter === "PICKED_UP" && o.status !== "PICKED_UP") return false;
@@ -397,8 +408,14 @@ export default function AdminDashboardPage() {
         return false;
 
       if (orderSearch.trim()) {
+        const searchTrim = orderSearch.trim();
+        const searchDigits = searchTrim.replace(/\D/g, "");
         const matchNick = matchesKoreanSearch(o.kakao_nickname, orderSearch);
-        const matchPhone = o.customer_phone_last4.includes(orderSearch.trim());
+        const matchPhone =
+          o.customer_phone_last4.includes(searchTrim) ||
+          (o.customer_phone ?? "").includes(searchTrim) ||
+          (searchDigits.length > 0 &&
+            (o.customer_phone ?? "").replace(/\D/g, "").includes(searchDigits));
         const matchItem = o.items.some((i) =>
           matchesKoreanSearch(i.product_name, orderSearch)
         );
@@ -630,9 +647,20 @@ export default function AdminDashboardPage() {
                       return (
                         <tr key={agg.product_id} className="hover:bg-slate-50/80">
                           <td className="py-3 pr-2">
-                            <p className="font-extrabold text-slate-900">
-                              {agg.product_name}
-                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                                  agg.category === "DELIVERY"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-blue-50 text-blue-700"
+                                }`}
+                              >
+                                {agg.category === "DELIVERY" ? "배송" : "픽업"}
+                              </span>
+                              <p className="font-extrabold text-slate-900">
+                                {agg.product_name}
+                              </p>
+                            </div>
                             <p className="text-[11px] text-slate-400">
                               {agg.unit_label} · {formatKRW(agg.price)}
                             </p>
@@ -741,6 +769,8 @@ export default function AdminDashboardPage() {
                 <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
                   {[
                     { id: "ALL", label: "전체" },
+                    { id: "PICKUP", label: "🏬 픽업" },
+                    { id: "DELIVERY", label: "🚚 배송" },
                     { id: "WAITING", label: "예약접수" },
                     { id: "READY", label: "입고완료" },
                     { id: "UNPAID", label: "미결제" },
@@ -793,11 +823,31 @@ export default function AdminDashboardPage() {
                             <span className="text-base font-black text-slate-900">
                               {order.kakao_nickname}
                             </span>
-                            {order.customer_phone_last4 && (
-                              <span className="text-xs font-bold text-slate-400">
-                                ({order.customer_phone_last4})
-                              </span>
+                            {order.customer_phone ? (
+                              <a
+                                href={`tel:${order.customer_phone.replace(/\D/g, "")}`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition"
+                              >
+                                📞 {order.customer_phone}
+                              </a>
+                            ) : (
+                              order.customer_phone_last4 && (
+                                <span className="text-xs font-bold text-slate-400">
+                                  ({order.customer_phone_last4})
+                                </span>
+                              )
                             )}
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
+                                order.fulfillment_type === "DELIVERY"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : "bg-blue-100 text-blue-800"
+                              }`}
+                            >
+                              {order.fulfillment_type === "DELIVERY"
+                                ? "🚚 배송"
+                                : "🏬 픽업"}
+                            </span>
                             <span
                               className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
                                 order.source === "KAKAO_BOT"
@@ -855,7 +905,12 @@ export default function AdminDashboardPage() {
                             </div>
                           ))}
                           <div className="pt-1.5 mt-1.5 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-                            <span>⏰ 픽업예정: {order.pickup_time || "미지정"}</span>
+                            <span>
+                              {order.fulfillment_type === "DELIVERY" &&
+                              order.delivery_address
+                                ? `📍 배송지: ${order.delivery_address}`
+                                : `⏰ 픽업예정: ${order.pickup_time || "미지정"}`}
+                            </span>
                             {order.memo && (
                               <span className="text-amber-800 font-semibold">
                                 📝 메모: {order.memo}
@@ -1066,9 +1121,8 @@ export default function AdminDashboardPage() {
                       }
                       className="w-full px-3 py-2.5 rounded-xl bg-slate-100 text-xs font-bold"
                     >
-                      <option value="TODAY">🍓 오늘의 과일</option>
-                      <option value="RESERVE">📦 내일 예약 상품</option>
-                      <option value="GIFT_SET">🎁 특가 묶음세트</option>
+                      <option value="PICKUP">🏬 매장 픽업 (PICKUP)</option>
+                      <option value="DELIVERY">🚚 배송 상품 (DELIVERY)</option>
                     </select>
                   </div>
                   <div className="sm:col-span-2">
@@ -1245,6 +1299,15 @@ export default function AdminDashboardPage() {
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                                p.category === "DELIVERY"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}
+                            >
+                              {p.category === "DELIVERY" ? "배송" : "픽업"}
+                            </span>
                             <span className="text-sm font-extrabold text-slate-900 truncate">
                               {p.name}
                             </span>
@@ -1391,22 +1454,37 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  오픈카톡 단톡방 링크 (주문 완료 후 이동할 주소)
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
+                <label className="block text-xs font-extrabold text-amber-950">
+                  💬 오픈카톡 단톡방 링크 (테스트 / 실제 공구방 연결 주소)
                 </label>
-                <input
-                  type="url"
-                  value={settings.kakao_openchat_url}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      kakao_openchat_url: e.target.value,
-                    })
-                  }
-                  placeholder="https://open.kakao.com/o/..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm font-mono"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={settings.kakao_openchat_url}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        kakao_openchat_url: e.target.value,
+                      })
+                    }
+                    placeholder="https://open.kakao.com/o/..."
+                    className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-white border border-amber-200 text-sm font-mono"
+                  />
+                  {settings.kakao_openchat_url && (
+                    <a
+                      href={settings.kakao_openchat_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2.5 rounded-xl bg-[#FEE500] text-[#191919] text-xs font-extrabold flex items-center shrink-0 hover:brightness-95"
+                    >
+                      테스트 열기
+                    </a>
+                  )}
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  입력 후 아래 [설정 저장하기]를 누르면 손님 페이지 [공구방으로 이동]에 즉시 적용됩니다.
+                </p>
               </div>
 
               <div>

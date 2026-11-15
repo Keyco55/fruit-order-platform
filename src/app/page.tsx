@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import Link from "next/link";
 import { copyTextSafe } from "@/lib/clipboard";
 import { formatKRW, matchesKoreanSearch } from "@/lib/formatters";
 import type {
+  FulfillmentType,
   Order,
   Product,
   ProductCategory,
@@ -11,54 +13,67 @@ import type {
 } from "@/types/domain";
 
 interface CartItem {
-  id: string; // product id
+  id: string;
   name: string;
   unit_label: string;
   price: number;
+  category: ProductCategory;
   qty: number;
 }
 
-export default function HongjeStyleCustomerPage() {
+const NICK_STORAGE_KEY = "customer_nickname_yucheon";
+const PHONE_STORAGE_KEY = "customer_phone_yucheon";
+const CART_STORAGE_KEY = "customer_cart_yucheon";
+
+export default function CustomerStorePage() {
   const [settings, setSettings] = useState<Omit<StoreSettings, "admin_pin"> | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. 내 예약 검색 상태
+  // 1. 내 예약 검색 상태 (닉네임 + 연락처 공통 동기화)
   const [nickInput, setNickInput] = useState("");
+  const [phoneInput, setPhoneInput] = useState("");
   const [searchedNick, setSearchedNick] = useState<string | null>(null);
+  const [searchedPhone, setSearchedPhone] = useState<string>("");
   const [isSearching, setIsSearching] = useState(false);
   const [resTab, setResTab] = useState<"TODAY" | "ALL">("TODAY");
 
-  // 2. 제품 검색 및 카테고리 탭
+  // 2. 제품 검색 및 픽업 | 배송 카테고리 탭
   const [productSearch, setProductSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<"ALL" | ProductCategory>("ALL");
 
   // 3. 장바구니 상태 (localStorage 연동)
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [isCartModalOpen, setIsCartModalOpen] = useState(false);
+  const [cartFulfillment, setCartFulfillment] = useState<FulfillmentType>("PICKUP");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
 
   // 4. 단품 주문 모달 상태
   const [orderModalProduct, setOrderModalProduct] = useState<{
     product: Product;
     qty: number;
+    fulfillment: FulfillmentType;
   } | null>(null);
 
   // 5. 제품 상세(프로모션) 모달 상태
   const [promoProduct, setPromoProduct] = useState<Product | null>(null);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
 
-  // 6. 토스트 알림 상태
+  // 6. 토스트 & 입력 포커스 Ref
   const [toastText, setToastText] = useState<string | null>(null);
+  const orderNickRef = useRef<HTMLInputElement | null>(null);
+  const orderPhoneRef = useRef<HTMLInputElement | null>(null);
+  const cartNickRef = useRef<HTMLInputElement | null>(null);
+  const cartPhoneRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastText(msg);
     setTimeout(() => {
       setToastText((prev) => (prev === msg ? null : prev));
-    }, 2800);
+    }, 3000);
   }, []);
 
-  // 초기 데이터 및 닉네임 / 장바구니 복원
   const fetchInitialData = useCallback(async () => {
     try {
       const res = await fetch("/api/bootstrap", { cache: "no-store" });
@@ -71,21 +86,62 @@ export default function HongjeStyleCustomerPage() {
     }
   }, []);
 
+  const fetchReservation = useCallback(
+    async (targetNick: string, targetPhone?: string) => {
+      const trimmedNick = targetNick.trim();
+      const trimmedPhone = (targetPhone ?? "").trim();
+      if (!trimmedNick) {
+        alert("닉네임을 입력해주세요.");
+        return;
+      }
+      if (!trimmedPhone) {
+        alert("연락처(휴대폰 번호 또는 뒷 4자리)를 입력해주세요.");
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem(NICK_STORAGE_KEY, trimmedNick);
+        localStorage.setItem(PHONE_STORAGE_KEY, trimmedPhone);
+      }
+
+      setIsSearching(true);
+      setSearchedNick(trimmedNick);
+      setSearchedPhone(trimmedPhone);
+
+      try {
+        const res = await fetch(
+          `/api/orders?nickname=${encodeURIComponent(
+            trimmedNick
+          )}&phone=${encodeURIComponent(trimmedPhone)}`,
+          { cache: "no-store" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setAllOrders(data.orders ?? []);
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     void fetchInitialData();
 
-    // 닉네임 복원
     if (typeof window !== "undefined") {
-      const savedNick = localStorage.getItem("customer_nickname_main") || "";
-      if (savedNick) {
-        setNickInput(savedNick);
+      const savedNick = localStorage.getItem(NICK_STORAGE_KEY) || "";
+      const savedPhone = localStorage.getItem(PHONE_STORAGE_KEY) || "";
+      if (savedNick) setNickInput(savedNick);
+      if (savedPhone) setPhoneInput(savedPhone);
+      if (savedNick && savedPhone) {
         setSearchedNick(savedNick);
-        void fetchReservation(savedNick);
+        setSearchedPhone(savedPhone);
+        void fetchReservation(savedNick, savedPhone);
       }
 
-      // 장바구니 복원
       try {
-        const savedCart = localStorage.getItem("customer_cart_main");
+        const savedCart = localStorage.getItem(CART_STORAGE_KEY);
         if (savedCart) {
           const parsed = JSON.parse(savedCart);
           if (Array.isArray(parsed)) setCartItems(parsed);
@@ -94,46 +150,37 @@ export default function HongjeStyleCustomerPage() {
         // ignore
       }
     }
-  }, [fetchInitialData]);
+  }, [fetchInitialData, fetchReservation]);
 
-  // 장바구니 변경 시 localStorage 동기화
-  const updateCartState = useCallback((newItems: CartItem[]) => {
-    setCartItems(newItems);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("customer_cart_main", JSON.stringify(newItems));
-    }
-  }, []);
-
-  // 예약 내역 조회
-  const fetchReservation = async (targetNick: string) => {
-    const trimmed = targetNick.trim();
-    if (!trimmed) {
-      alert("닉네임을 입력해주세요.");
-      return;
-    }
-
-    if (typeof window !== "undefined") {
-      localStorage.setItem("customer_nickname_main", trimmed);
-    }
-
-    setIsSearching(true);
-    setSearchedNick(trimmed);
-
-    try {
-      const res = await fetch(
-        `/api/orders?nickname=${encodeURIComponent(trimmed)}`,
-        { cache: "no-store" }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setAllOrders(data.orders ?? []);
-      }
-    } finally {
-      setIsSearching(false);
+  const handleNicknameChange = (val: string) => {
+    setNickInput(val);
+    if (typeof window !== "undefined" && val.trim()) {
+      localStorage.setItem(NICK_STORAGE_KEY, val.trim());
     }
   };
 
-  // 장바구니 조작
+  const handlePhoneChange = (val: string) => {
+    setPhoneInput(val);
+    if (typeof window !== "undefined" && val.trim()) {
+      localStorage.setItem(PHONE_STORAGE_KEY, val.trim());
+    }
+  };
+
+  const updateCartState = useCallback((newItems: CartItem[]) => {
+    setCartItems(newItems);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(newItems));
+    }
+  }, []);
+
+  // 장바구니 열기 (담긴 상품 카테고리에 따라 픽업/배송 기본값 자동 설정)
+  const openCartModal = () => {
+    const hasDelivery = cartItems.some((c) => c.category === "DELIVERY");
+    setCartFulfillment(hasDelivery ? "DELIVERY" : "PICKUP");
+    setIsCartModalOpen(true);
+  };
+
+  // 장바구니 추가
   const addToCart = (product: Product, event?: React.MouseEvent) => {
     if (event) event.stopPropagation();
 
@@ -163,6 +210,7 @@ export default function HongjeStyleCustomerPage() {
           name: product.name,
           unit_label: product.unit_label,
           price: product.price,
+          category: product.category,
           qty: 1,
         },
       ];
@@ -204,36 +252,104 @@ export default function HongjeStyleCustomerPage() {
       alert("품절된 상품입니다.");
       return;
     }
-    setOrderModalProduct({ product, qty: 1 });
+    setOrderModalProduct({
+      product,
+      qty: 1,
+      fulfillment: product.category,
+    });
+  };
+
+  // 클립보드 주문 텍스트 생성 헬퍼
+  const buildClipboardText = (
+    nickname: string,
+    fulfillment: FulfillmentType,
+    items: Array<{ name: string; qty: number }>,
+    address?: string
+  ) => {
+    const tag = fulfillment === "DELIVERY" ? "배송" : "픽업";
+    const lines = [
+      `[${settings?.store_name || "후르츠파머 유천점"}] 닉네임: ${nickname} (${tag})`,
+      ...items.map((item) => `- ${item.name} ${item.qty}`),
+    ];
+    if (fulfillment === "DELIVERY" && address?.trim()) {
+      lines.push(`배송지: ${address.trim()}`);
+    }
+    return lines.join("\n");
   };
 
   // 단품 주문 -> 공구방으로 이동
   const handleSingleOrderGoToKakao = async () => {
     if (!orderModalProduct) return;
-    const { product, qty } = orderModalProduct;
-    const copyText = `${product.name} ${qty}`;
+    const cleanNick = nickInput.trim();
+    if (!cleanNick) {
+      alert("오픈카톡 닉네임을 입력해 주세요!");
+      orderNickRef.current?.focus();
+      return;
+    }
 
-    // 1. 클립보드 복사
+    const cleanPhone = phoneInput.trim();
+    if (cleanPhone.replace(/\D/g, "").length < 9) {
+      alert("문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!");
+      orderPhoneRef.current?.focus();
+      return;
+    }
+
+    const { product, qty, fulfillment } = orderModalProduct;
+    if (fulfillment === "DELIVERY" && !deliveryAddress.trim()) {
+      alert("배송 받으실 주소를 입력해 주세요!");
+      return;
+    }
+
+    const copyText = buildClipboardText(
+      cleanNick,
+      fulfillment,
+      [{ name: product.name, qty }],
+      deliveryAddress
+    );
+
+    // 1. 클립보드 즉시 복사 (모바일 User Gesture 유지)
     await copyTextSafe(copyText);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(NICK_STORAGE_KEY, cleanNick);
+      localStorage.setItem(PHONE_STORAGE_KEY, cleanPhone);
+    }
+
     showToast("제품 내역 복사됐어요.\n공구방에 붙여넣기 후 전송하시면 예약됩니다");
 
-    // 2. 서버 백그라운드 주문 집계 (DB 기록 및 재고 차감)
-    void fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kakao_nickname: nickInput.trim() || "단톡방손님",
-        source: "WEB",
-        items: [{ product_id: product.id, quantity: qty }],
-      }),
-    });
-
-    // 3. 오픈카톡방 이동
+    // 2. 오픈카톡방 열기
     const link = (settings?.kakao_openchat_url || "").trim();
-    if (!link) {
-      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
-    } else {
+    if (link) {
       window.open(link, "_blank");
+    } else {
+      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
+    }
+
+    // 3. 서버 주문 기록 및 화면 재고 갱신
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kakao_nickname: cleanNick,
+          customer_phone: cleanPhone,
+          fulfillment_type: fulfillment,
+          delivery_address:
+            fulfillment === "DELIVERY" ? deliveryAddress.trim() : "",
+          source: "WEB",
+          items: [{ product_id: product.id, quantity: qty }],
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.products) setProducts(data.products);
+        if (data.myOrders) {
+          setSearchedNick(cleanNick);
+          setSearchedPhone(cleanPhone);
+          setAllOrders(data.myOrders);
+        }
+      }
+    } catch {
+      // ignore network fallback error
     }
 
     setOrderModalProduct(null);
@@ -246,45 +362,88 @@ export default function HongjeStyleCustomerPage() {
       return;
     }
 
-    const copyText = cartItems.map((c) => `${c.name} ${c.qty}`).join("\n");
+    const cleanNick = nickInput.trim();
+    if (!cleanNick) {
+      alert("오픈카톡 닉네임을 입력해 주세요!");
+      cartNickRef.current?.focus();
+      return;
+    }
+
+    const cleanPhone = phoneInput.trim();
+    if (cleanPhone.replace(/\D/g, "").length < 9) {
+      alert("문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!");
+      cartPhoneRef.current?.focus();
+      return;
+    }
+
+    if (cartFulfillment === "DELIVERY" && !deliveryAddress.trim()) {
+      alert("배송 받으실 주소를 입력해 주세요!");
+      return;
+    }
+
+    const copyText = buildClipboardText(
+      cleanNick,
+      cartFulfillment,
+      cartItems.map((c) => ({ name: c.name, qty: c.qty })),
+      deliveryAddress
+    );
 
     // 1. 클립보드 복사
     await copyTextSafe(copyText);
-    showToast("제품 내역 복사됐어요.\n공구방에 붙여넣기 후 전송하시면 예약됩니다");
-
-    // 2. 서버 백그라운드 주문 집계
-    void fetch("/api/orders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kakao_nickname: nickInput.trim() || "단톡방손님",
-        source: "WEB",
-        items: cartItems.map((c) => ({
-          product_id: c.id,
-          quantity: c.qty,
-        })),
-      }),
-    });
-
-    // 3. 오픈카톡방 이동
-    const link = (settings?.kakao_openchat_url || "").trim();
-    if (!link) {
-      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
-    } else {
-      window.open(link, "_blank");
+    if (typeof window !== "undefined") {
+      localStorage.setItem(NICK_STORAGE_KEY, cleanNick);
+      localStorage.setItem(PHONE_STORAGE_KEY, cleanPhone);
     }
 
-    // 장바구니 초기화
+    showToast("제품 내역 복사됐어요.\n공구방에 붙여넣기 후 전송하시면 예약됩니다");
+
+    // 2. 오픈카톡방 열기
+    const link = (settings?.kakao_openchat_url || "").trim();
+    if (link) {
+      window.open(link, "_blank");
+    } else {
+      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
+    }
+
+    // 3. 서버 주문 기록 및 재고 반영
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kakao_nickname: cleanNick,
+          customer_phone: cleanPhone,
+          fulfillment_type: cartFulfillment,
+          delivery_address:
+            cartFulfillment === "DELIVERY" ? deliveryAddress.trim() : "",
+          source: "WEB",
+          items: cartItems.map((c) => ({
+            product_id: c.id,
+            quantity: c.qty,
+          })),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.products) setProducts(data.products);
+        if (data.myOrders) {
+          setSearchedNick(cleanNick);
+          setSearchedPhone(cleanPhone);
+          setAllOrders(data.myOrders);
+        }
+      }
+    } catch {
+      // ignore network error
+    }
+
     updateCartState([]);
     setIsCartModalOpen(false);
   };
 
-  // 상단 스크롤
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // 장바구니 총액 및 총 수량
   const cartTotalAmount = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.price * item.qty, 0),
     [cartItems]
@@ -294,7 +453,16 @@ export default function HongjeStyleCustomerPage() {
     [cartItems]
   );
 
-  // 예약 조회 필터 (오늘 수령 예정 vs 전체)
+  // 카테고리별 개수 계산 (픽업 | 배송)
+  const categoryCounts = useMemo(() => {
+    return {
+      ALL: products.length,
+      PICKUP: products.filter((p) => p.category === "PICKUP").length,
+      DELIVERY: products.filter((p) => p.category === "DELIVERY").length,
+    };
+  }, [products]);
+
+  // 예약 조회 필터
   const filteredReservations = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
     const valid = allOrders.filter((o) => o.status !== "CANCELED");
@@ -332,149 +500,219 @@ export default function HongjeStyleCustomerPage() {
     <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased pb-28">
       {/* 1. 상단 Toss 스타일 다크 헤더 */}
       <header className="sticky top-0 z-40 bg-[#191F28] text-white h-14 flex items-center shadow-xs">
-        <div className="w-[95%] max-w-[800px] mx-auto px-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-base sm:text-lg font-bold tracking-tight text-white m-0">
+        <div className="w-[95%] max-w-[800px] mx-auto px-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-base sm:text-lg font-bold tracking-tight text-white m-0 truncate">
               {settings?.store_name || "후르츠파머 유천점"}
             </h1>
-            <span className="inline-block bg-white/10 text-white border border-white/20 rounded-[10px] px-2.5 py-0.5 text-xs font-semibold">
+            <span className="inline-block bg-white/10 text-white border border-white/20 rounded-[10px] px-2 py-0.5 text-[11px] font-semibold shrink-0">
               {settings?.branch_code || "유천점"}
             </span>
           </div>
-          <span className="text-xs sm:text-sm font-semibold text-white/70">
-            구매 및 예약확인
-          </span>
+
+          <Link
+            href="/orders"
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-[10px] bg-white/15 hover:bg-white/25 text-xs font-bold text-white shrink-0 transition"
+          >
+            <span>구매 및 예약확인</span>
+          </Link>
         </div>
       </header>
 
       {/* 2. 메인 컨테이너 */}
-      <main className="w-[95%] max-w-[800px] mx-auto my-4 px-2 box-border">
+      <main className="w-[95%] max-w-[800px] mx-auto my-4 px-2 box-border space-y-4">
+        {/* 상단 매장 대표 이미지(썸네일) 브랜드 배너 */}
+        <section className="bg-white rounded-2xl border border-[#E5E8EB] p-4 shadow-xs flex items-center justify-between gap-3.5">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border border-[#E5E8EB] bg-white shrink-0 flex items-center justify-center">
+              <img
+                src="/images/fruit-farmer-thumb.jpg"
+                alt="후르츠파머 유천점"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-extrabold text-[#191F28] m-0 truncate">
+                {settings?.store_name || "후르츠파머 유천점"}
+              </h2>
+              <p className="text-xs sm:text-sm text-[#8B95A1] mt-0.5 line-clamp-2">
+                {settings?.subtitle || "매일 새벽 경매 1등품 직송 신선 과일"}
+              </p>
+              <p className="text-[11px] text-[#03B26C] font-semibold mt-1 truncate">
+                📍 {settings?.pickup_guide || "매장 픽업 / 배송 가능"}
+              </p>
+            </div>
+          </div>
+
+          {settings?.kakao_openchat_url && (
+            <a
+              href={settings.kakao_openchat_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2.5 rounded-xl bg-[#FEE500] text-[#191919] text-xs font-extrabold shadow-2xs hover:brightness-95 transition shrink-0"
+            >
+              💬 공구방
+            </a>
+          )}
+        </section>
+
         {/* 공지사항 배너 */}
         {settings?.notice_text && (
-          <div className="p-4 mb-5 text-sm leading-relaxed whitespace-pre-wrap rounded-2xl bg-[#FFF4E5] text-[#FF8A00] border border-[#ffe0b0] shadow-sm">
+          <div className="p-4 text-sm leading-relaxed whitespace-pre-wrap rounded-2xl bg-[#FFF4E5] text-[#FF8A00] border border-[#ffe0b0] shadow-xs">
             {settings.notice_text}
           </div>
         )}
 
         {/* -------------------------------------------------------------
-            SECTION 1: 내 예약 확인
+            SECTION 1: 내 예약 확인 (인라인 + 상세 페이지 링크)
            ------------------------------------------------------------- */}
         <section>
-          <div className="text-[1.15rem] font-bold text-[#191F28] mb-3">
-            내 예약 확인
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[1.15rem] font-bold text-[#191F28]">
+              내 예약 확인
+            </div>
+            <Link
+              href="/orders"
+              className="text-xs font-bold text-[#0064FF] hover:underline"
+            >
+              구매 및 예약확인 페이지 →
+            </Link>
           </div>
 
-          <div className="flex items-center gap-2 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 mb-3">
             <input
               type="text"
               value={nickInput}
-              onChange={(e) => setNickInput(e.target.value)}
+              onChange={(e) => handleNicknameChange(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void fetchReservation(nickInput);
+                if (e.key === "Enter") void fetchReservation(nickInput, phoneInput);
               }}
-              placeholder="닉네임 (일부분만 입력해도 OK)"
-              className="flex-1 min-w-0 p-3 sm:px-3.5 sm:py-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
+              placeholder="오픈카톡 닉네임"
+              className="w-full min-w-0 p-3 sm:px-3.5 sm:py-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm sm:text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
+            />
+            <input
+              type="tel"
+              value={phoneInput}
+              onChange={(e) => handlePhoneChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void fetchReservation(nickInput, phoneInput);
+              }}
+              placeholder="연락처 (010-0000-0000 또는 뒷4자리)"
+              className="w-full min-w-0 p-3 sm:px-3.5 sm:py-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm sm:text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
             />
             <button
               type="button"
-              onClick={() => void fetchReservation(nickInput)}
+              onClick={() => void fetchReservation(nickInput, phoneInput)}
               className="px-4 py-3 rounded-xl bg-[#4F92F8] hover:bg-[#3E82EB] text-white font-bold text-sm shrink-0 transition"
             >
-              검색
+              조회
             </button>
           </div>
 
           {/* 예약 조회 결과 영역 */}
           {isSearching ? (
             <div className="text-center py-5 text-sm text-[#8B95A1]">조회중...</div>
-          ) : searchedNick && (
-            <div className="bg-white rounded-2xl border border-[#E5E8EB] shadow-xs mb-5 overflow-hidden">
-              <div className="bg-[#F2F4F6] px-4 py-3 border-b border-[#E5E8EB] flex items-center justify-between flex-wrap gap-2">
-                <span className="font-bold text-base text-[#191F28]">
-                  {searchedNick}님의 예약
-                </span>
-                <div className="flex gap-1.5 text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setResTab("TODAY")}
-                    className={`px-3 py-1.5 rounded-full transition ${
-                      resTab === "TODAY"
-                        ? "bg-[#4F92F8] text-white shadow-xs"
-                        : "bg-white text-[#191F28] border border-[#E5E8EB]"
-                    }`}
-                  >
-                    오늘 수령 예정
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResTab("ALL")}
-                    className={`px-3 py-1.5 rounded-full transition ${
-                      resTab === "ALL"
-                        ? "bg-[#4F92F8] text-white shadow-xs"
-                        : "bg-white text-[#191F28] border border-[#E5E8EB]"
-                    }`}
-                  >
-                    전체 내역 ({allOrders.length})
-                  </button>
+          ) : (
+            searchedNick && (
+              <div className="bg-white rounded-2xl border border-[#E5E8EB] shadow-xs overflow-hidden">
+                <div className="bg-[#F2F4F6] px-4 py-3 border-b border-[#E5E8EB] flex items-center justify-between flex-wrap gap-2">
+                  <span className="font-bold text-base text-[#191F28]">
+                    {searchedNick}
+                    {searchedPhone ? ` (${searchedPhone})` : ""}님의 예약
+                  </span>
+                  <div className="flex gap-1.5 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setResTab("TODAY")}
+                      className={`px-3 py-1.5 rounded-full transition ${
+                        resTab === "TODAY"
+                          ? "bg-[#4F92F8] text-white shadow-xs"
+                          : "bg-white text-[#191F28] border border-[#E5E8EB]"
+                      }`}
+                    >
+                      수령 예정
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResTab("ALL")}
+                      className={`px-3 py-1.5 rounded-full transition ${
+                        resTab === "ALL"
+                          ? "bg-[#4F92F8] text-white shadow-xs"
+                          : "bg-white text-[#191F28] border border-[#E5E8EB]"
+                      }`}
+                    >
+                      전체 내역 ({allOrders.length})
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              {filteredReservations.length === 0 ? (
-                <div className="text-center py-6 text-sm text-[#8B95A1]">
-                  예약 내역이 없습니다.
-                </div>
-              ) : (
-                <>
-                  <div className="divide-y divide-[#E5E8EB] px-4">
-                    {filteredReservations.flatMap((order) =>
-                      order.items.map((item) => (
-                        <div
-                          key={item.id}
-                          className="py-3.5 flex items-center justify-between gap-3"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="font-bold text-base text-[#191F28] mb-1 truncate">
-                              {item.product_name}
+                {filteredReservations.length === 0 ? (
+                  <div className="text-center py-6 text-sm text-[#8B95A1]">
+                    예약 내역이 없습니다.
+                  </div>
+                ) : (
+                  <>
+                    <div className="divide-y divide-[#E5E8EB] px-4">
+                      {filteredReservations.flatMap((order) =>
+                        order.items.map((item) => (
+                          <div
+                            key={item.id}
+                            className="py-3.5 flex items-center justify-between gap-3"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="font-bold text-base text-[#191F28] mb-1 truncate">
+                                {item.product_name}
+                              </div>
+                              <div className="text-xs text-[#8B95A1] flex items-center gap-2 flex-wrap">
+                                <span
+                                  className={`font-bold ${
+                                    order.fulfillment_type === "DELIVERY"
+                                      ? "text-[#03B26C]"
+                                      : "text-[#1B64DA]"
+                                  }`}
+                                >
+                                  {order.fulfillment_type === "DELIVERY"
+                                    ? "🚚 배송"
+                                    : "🏬 픽업"}
+                                </span>
+                                <span>📅 {order.order_date}</span>
+                                {item.is_received ? (
+                                  <span className="font-bold text-[#03B26C]">
+                                    ✅ 입고완료
+                                  </span>
+                                ) : (
+                                  <span className="font-bold text-[#FF8A00]">
+                                    ⏳ 준비중
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div className="text-xs text-[#8B95A1] flex items-center gap-2 flex-wrap">
-                              <span>📅 {order.order_date}</span>
-                              {item.is_received ? (
-                                <span className="font-bold text-[#03B26C]">
-                                  ✅ 입고완료
-                                </span>
-                              ) : (
-                                <span className="font-bold text-[#FF8A00]">
-                                  ⏳ 준비중
-                                </span>
-                              )}
-                              <span>단가: {formatKRW(item.unit_price)}</span>
+                            <div className="text-right shrink-0">
+                              <span className="font-bold text-[#0064FF] text-base">
+                                x {item.quantity}
+                              </span>
+                              <div className="text-xs font-semibold text-[#191F28] mt-0.5">
+                                {formatKRW(item.subtotal)}
+                              </div>
                             </div>
                           </div>
-                          <div className="text-right shrink-0">
-                            <span className="font-bold text-[#0064FF] text-base">
-                              x {item.quantity}
-                            </span>
-                            <div className="text-xs font-semibold text-[#191F28] mt-0.5">
-                              {formatKRW(item.subtotal)}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  <div className="bg-[#FFF4E5] px-4 py-3.5 text-right font-bold text-[#FF8A00] border-t border-[#E5E8EB] text-base">
-                    총 금액: {formatKRW(totalReservationPrice)}
-                  </div>
-                </>
-              )}
-            </div>
+                        ))
+                      )}
+                    </div>
+                    <div className="bg-[#FFF4E5] px-4 py-3.5 text-right font-bold text-[#FF8A00] border-t border-[#E5E8EB] text-base">
+                      총 금액: {formatKRW(totalReservationPrice)}
+                    </div>
+                  </>
+                )}
+              </div>
+            )
           )}
         </section>
 
         {/* -------------------------------------------------------------
-            SECTION 2: 현재 구매 가능 제품
+            SECTION 2: 현재 구매 가능 제품 (픽업 | 배송 2파트 분류)
            ------------------------------------------------------------- */}
-        <section className="mt-8 border-t border-[#E5E8EB] pt-6">
+        <section className="pt-5 border-t border-[#E5E8EB]">
           <div className="text-[1.15rem] font-bold text-[#191F28] mb-3">
             현재 구매 가능 제품
           </div>
@@ -490,19 +728,20 @@ export default function HongjeStyleCustomerPage() {
             />
           </div>
 
-          {/* 가로 스크롤 날짜/카테고리 탭 (상단 고정) */}
+          {/* 상단 고정 카테고리 탭: 전체 | 픽업 | 배송 */}
           <div className="sticky top-14 z-30 bg-[#F2F4F6] py-2 flex gap-2 overflow-x-auto no-scrollbar mb-3">
             {[
-              { id: "ALL", label: "전체" },
-              { id: "TODAY", label: "오늘의 과일" },
-              { id: "RESERVE", label: "내일 예약" },
-              { id: "GIFT_SET", label: "특가 세트" },
+              { id: "ALL", label: `전체 (${categoryCounts.ALL})` },
+              { id: "PICKUP", label: `🏬 픽업 (${categoryCounts.PICKUP})` },
+              { id: "DELIVERY", label: `🚚 배송 (${categoryCounts.DELIVERY})` },
             ].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setSelectedCategory(tab.id as "ALL" | ProductCategory)}
-                className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition ${
+                onClick={() =>
+                  setSelectedCategory(tab.id as "ALL" | ProductCategory)
+                }
+                className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition ${
                   selectedCategory === tab.id
                     ? "bg-[#4F92F8] text-white border border-[#4F92F8] shadow-xs"
                     : "bg-white text-[#191F28] border border-[#E5E8EB] hover:bg-slate-50"
@@ -521,7 +760,7 @@ export default function HongjeStyleCustomerPage() {
               </div>
             ) : filteredProducts.length === 0 ? (
               <div className="text-center py-10 text-sm text-[#8B95A1] bg-white rounded-2xl border border-[#E5E8EB]">
-                등록된 제품이 없습니다.
+                해당 카테고리에 등록된 제품이 없습니다.
               </div>
             ) : (
               filteredProducts.map((product) => {
@@ -538,9 +777,13 @@ export default function HongjeStyleCustomerPage() {
                     <div
                       role="button"
                       tabIndex={0}
-                      onClick={() => setPromoProduct(product)}
+                      onClick={() => {
+                        setActiveImageIndex(0);
+                        setPromoProduct(product);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
+                          setActiveImageIndex(0);
                           setPromoProduct(product);
                         }
                       }}
@@ -563,15 +806,31 @@ export default function HongjeStyleCustomerPage() {
 
                       {/* 정보 영역 */}
                       <div className="flex-1 min-w-0">
-                        <div
-                          className={`font-bold text-[1.05rem] mb-2 truncate ${
-                            isSoldOut ? "text-[#B0B8C1]" : "text-[#191F28]"
-                          }`}
-                        >
-                          {product.name}
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-bold shrink-0 ${
+                              product.category === "DELIVERY"
+                                ? "bg-[#E8F8F0] text-[#03B26C]"
+                                : "bg-[#E8F3FF] text-[#1B64DA]"
+                            }`}
+                          >
+                            {product.category === "DELIVERY"
+                              ? "🚚 배송"
+                              : "🏬 픽업"}
+                          </span>
+                          <div
+                            className={`font-bold text-[1.02rem] truncate ${
+                              isSoldOut ? "text-[#B0B8C1]" : "text-[#191F28]"
+                            }`}
+                          >
+                            {product.name}
+                          </div>
                         </div>
+
                         <div className="grid grid-cols-2 gap-1 text-sm text-[#8B95A1]">
-                          <span>단위: {product.unit_label}</span>
+                          <span className="truncate">
+                            단위: {product.unit_label}
+                          </span>
                           <span className="font-semibold text-[#191F28]">
                             가격: {formatKRW(product.price)}
                           </span>
@@ -627,11 +886,10 @@ export default function HongjeStyleCustomerPage() {
       {/* -------------------------------------------------------------
           3. 우측 하단 플로팅 버튼 (장바구니 FAB & 상단 이동 FAB)
          ------------------------------------------------------------- */}
-      {/* 초록색 장바구니 FAB (담긴 상품이 있을 때 노출) */}
       {cartItems.length > 0 && (
         <button
           type="button"
-          onClick={() => setIsCartModalOpen(true)}
+          onClick={openCartModal}
           aria-label="장바구니 열기"
           className="fixed right-5 bottom-20 w-12 h-12 rounded-full bg-[#3FC08E] hover:bg-[#34B07F] text-white flex items-center justify-center shadow-lg z-30 transition transform active:scale-95"
         >
@@ -642,7 +900,6 @@ export default function HongjeStyleCustomerPage() {
         </button>
       )}
 
-      {/* 파란색 상단 스크롤 FAB */}
       <button
         type="button"
         onClick={scrollToTop}
@@ -663,10 +920,10 @@ export default function HongjeStyleCustomerPage() {
           onClick={() => setOrderModalProduct(null)}
         >
           <div
-            className="bg-white w-full max-w-[380px] rounded-2xl border border-[#E5E8EB] shadow-xl overflow-hidden"
+            className="bg-white w-full max-w-[390px] rounded-2xl border border-[#E5E8EB] shadow-xl overflow-hidden max-h-[92vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E8EB]">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E8EB] shrink-0">
               <h2 className="text-base font-bold text-[#191F28] m-0">
                 제품 주문하기
               </h2>
@@ -679,16 +936,24 @@ export default function HongjeStyleCustomerPage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* 주문 품목 & 수량 */}
               <div>
-                <div className="text-xs font-semibold text-[#B0B8C1] tracking-wider mb-2">
+                <div className="text-xs font-semibold text-[#8B95A1] mb-1.5">
                   주문 내용
                 </div>
-                <div className="bg-[#E8F3FF] border border-[#c9e0ff] rounded-xl p-4 flex items-center justify-between">
-                  <div className="font-bold text-base text-[#1B64DA]">
-                    {orderModalProduct.product.name}
+                <div className="bg-[#E8F3FF] border border-[#c9e0ff] rounded-xl p-3.5 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm sm:text-base text-[#1B64DA] truncate">
+                      {orderModalProduct.product.name}
+                    </div>
+                    <div className="text-xs text-[#1B64DA]/80 mt-0.5">
+                      {formatKRW(
+                        orderModalProduct.product.price * orderModalProduct.qty
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() =>
@@ -728,7 +993,94 @@ export default function HongjeStyleCustomerPage() {
                 </div>
               </div>
 
-              <p className="text-sm text-[#8B95A1] text-center leading-relaxed m-0">
+              {/* 닉네임 입력란 */}
+              <div>
+                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                  오픈카톡 닉네임 <span className="text-[#F04452]">*필수</span>
+                </label>
+                <input
+                  ref={orderNickRef}
+                  type="text"
+                  value={nickInput}
+                  onChange={(e) => handleNicknameChange(e.target.value)}
+                  placeholder="단톡방 닉네임을 입력해 주세요"
+                  className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                />
+              </div>
+
+              {/* 연락처 입력란 */}
+              <div>
+                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                  연락처 (휴대폰 번호) <span className="text-[#F04452]">*필수</span>
+                </label>
+                <input
+                  ref={orderPhoneRef}
+                  type="tel"
+                  value={phoneInput}
+                  onChange={(e) => handlePhoneChange(e.target.value)}
+                  placeholder="예: 010-1234-5678 (예약 확인·긴급 안내용)"
+                  className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                />
+                <p className="text-[11px] text-[#8B95A1] mt-1 m-0">
+                  단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만 사용됩니다.
+                </p>
+              </div>
+
+              {/* 수령 방식 선택 (픽업 | 배송) */}
+              <div>
+                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                  수령 방식
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOrderModalProduct((prev) =>
+                        prev ? { ...prev, fulfillment: "PICKUP" } : null
+                      )
+                    }
+                    className={`py-2.5 rounded-xl text-xs font-bold border transition ${
+                      orderModalProduct.fulfillment === "PICKUP"
+                        ? "bg-[#4F92F8] text-white border-[#4F92F8]"
+                        : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
+                    }`}
+                  >
+                    🏬 매장 픽업
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOrderModalProduct((prev) =>
+                        prev ? { ...prev, fulfillment: "DELIVERY" } : null
+                      )
+                    }
+                    className={`py-2.5 rounded-xl text-xs font-bold border transition ${
+                      orderModalProduct.fulfillment === "DELIVERY"
+                        ? "bg-[#3FC08E] text-white border-[#3FC08E]"
+                        : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
+                    }`}
+                  >
+                    🚚 배송
+                  </button>
+                </div>
+              </div>
+
+              {orderModalProduct.fulfillment === "DELIVERY" && (
+                <div>
+                  <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                    배송 받으실 주소 <span className="text-[#F04452]">*필수</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    placeholder="예: 유천동 현대아파트 101동 502호"
+                    className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                  />
+                </div>
+              )}
+
+              <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
                 <em className="not-italic text-[#0064FF] font-semibold">
                   공구방으로 이동
                 </em>
@@ -750,7 +1102,7 @@ export default function HongjeStyleCustomerPage() {
       )}
 
       {/* -------------------------------------------------------------
-          5. 모달 B: [장바구니] 모달 (#cartModal)
+          5. 모달 B: [장바구니] 모달 (#cartModal) - 닉네임 + 픽업/배송 포함
          ------------------------------------------------------------- */}
       {isCartModalOpen && (
         <div
@@ -760,7 +1112,7 @@ export default function HongjeStyleCustomerPage() {
           onClick={() => setIsCartModalOpen(false)}
         >
           <div
-            className="bg-white w-full max-w-[400px] rounded-2xl border border-[#E5E8EB] shadow-xl overflow-hidden max-h-[90vh] flex flex-col"
+            className="bg-white w-full max-w-[400px] rounded-2xl border border-[#E5E8EB] shadow-xl overflow-hidden max-h-[92vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E8EB] shrink-0">
@@ -776,63 +1128,148 @@ export default function HongjeStyleCustomerPage() {
               </button>
             </div>
 
-            <p className="text-xs sm:text-sm text-[#8B95A1] text-center px-4 pt-3 pb-1 leading-relaxed">
-              <em className="not-italic text-[#0064FF] font-semibold">
-                공구방으로 이동
-              </em>
-              하여 채팅창에 붙여넣기 하시면
-              <br />
-              집계 프로그램에 예약을 도와 드립니다
-            </p>
-
-            <div className="flex-1 overflow-y-auto px-5 py-2 divide-y divide-[#E5E8EB] min-h-[100px]">
-              {cartItems.length === 0 ? (
-                <div className="text-center py-10 text-sm text-[#8B95A1]">
-                  장바구니가 비어 있습니다.
-                </div>
-              ) : (
-                cartItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="py-3 flex items-center justify-between gap-2"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-sm text-[#191F28] truncate">
-                        {item.name}
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+              {/* 담긴 상품 목록 */}
+              <div className="divide-y divide-[#E5E8EB]">
+                {cartItems.length === 0 ? (
+                  <div className="text-center py-8 text-sm text-[#8B95A1]">
+                    장바구니가 비어 있습니다.
+                  </div>
+                ) : (
+                  cartItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="py-3 flex items-center justify-between gap-2"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-sm text-[#191F28] truncate">
+                          {item.name}
+                        </div>
+                        <div className="text-xs text-[#8B95A1]">
+                          {formatKRW(item.price)}
+                        </div>
                       </div>
-                      <div className="text-xs text-[#8B95A1]">
-                        {formatKRW(item.price)}
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => changeCartQty(item.id, -1)}
+                          className="w-7 h-7 rounded-lg bg-[#E8F8F0] text-[#03B26C] font-bold border border-[#b8ebd4] flex items-center justify-center"
+                        >
+                          -
+                        </button>
+                        <span className="font-bold text-sm min-w-[20px] text-center">
+                          {item.qty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => changeCartQty(item.id, 1)}
+                          className="w-7 h-7 rounded-lg bg-[#E8F8F0] text-[#03B26C] font-bold border border-[#b8ebd4] flex items-center justify-center"
+                        >
+                          +
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(item.id)}
+                          className="ml-1 text-xs text-[#F04452] font-semibold px-1"
+                        >
+                          삭제
+                        </button>
                       </div>
                     </div>
+                  ))
+                )}
+              </div>
 
-                    <div className="flex items-center gap-2">
+              {/* 닉네임 및 수령 방식 입력 영역 */}
+              {cartItems.length > 0 && (
+                <div className="space-y-3 pt-3 border-t border-[#E5E8EB]">
+                  <div>
+                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                      오픈카톡 닉네임 <span className="text-[#F04452]">*필수</span>
+                    </label>
+                    <input
+                      ref={cartNickRef}
+                      type="text"
+                      value={nickInput}
+                      onChange={(e) => handleNicknameChange(e.target.value)}
+                      placeholder="단톡방 닉네임을 입력해 주세요"
+                      className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                      연락처 (휴대폰 번호) <span className="text-[#F04452]">*필수</span>
+                    </label>
+                    <input
+                      ref={cartPhoneRef}
+                      type="tel"
+                      value={phoneInput}
+                      onChange={(e) => handlePhoneChange(e.target.value)}
+                      placeholder="예: 010-1234-5678 (예약 확인·긴급 안내용)"
+                      className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                    />
+                    <p className="text-[11px] text-[#8B95A1] mt-1 m-0">
+                      단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만 사용됩니다.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                      수령 방식 선택
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => changeCartQty(item.id, -1)}
-                        className="w-7 h-7 rounded-lg bg-[#E8F8F0] text-[#03B26C] font-bold border border-[#b8ebd4] flex items-center justify-center"
+                        onClick={() => setCartFulfillment("PICKUP")}
+                        className={`py-2.5 rounded-xl text-xs font-bold border transition ${
+                          cartFulfillment === "PICKUP"
+                            ? "bg-[#4F92F8] text-white border-[#4F92F8]"
+                            : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
+                        }`}
                       >
-                        -
+                        🏬 매장 픽업
                       </button>
-                      <span className="font-bold text-sm min-w-[20px] text-center">
-                        {item.qty}
-                      </span>
                       <button
                         type="button"
-                        onClick={() => changeCartQty(item.id, 1)}
-                        className="w-7 h-7 rounded-lg bg-[#E8F8F0] text-[#03B26C] font-bold border border-[#b8ebd4] flex items-center justify-center"
+                        onClick={() => setCartFulfillment("DELIVERY")}
+                        className={`py-2.5 rounded-xl text-xs font-bold border transition ${
+                          cartFulfillment === "DELIVERY"
+                            ? "bg-[#3FC08E] text-white border-[#3FC08E]"
+                            : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
+                        }`}
                       >
-                        +
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeFromCart(item.id)}
-                        className="ml-1 text-xs text-[#F04452] font-semibold px-1"
-                      >
-                        삭제
+                        🚚 배송
                       </button>
                     </div>
                   </div>
-                ))
+
+                  {cartFulfillment === "DELIVERY" && (
+                    <div>
+                      <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                        배송 받으실 주소{" "}
+                        <span className="text-[#F04452]">*필수</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={deliveryAddress}
+                        onChange={(e) => setDeliveryAddress(e.target.value)}
+                        placeholder="예: 유천동 현대아파트 101동 502호"
+                        className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
+                      />
+                    </div>
+                  )}
+
+                  <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
+                    <em className="not-italic text-[#0064FF] font-semibold">
+                      공구방으로 이동
+                    </em>
+                    하여 채팅창에 붙여넣기 하시면
+                    <br />
+                    집계 프로그램에 예약을 도와 드립니다
+                  </p>
+                </div>
               )}
             </div>
 
@@ -894,11 +1331,13 @@ export default function HongjeStyleCustomerPage() {
             </div>
 
             <div className="p-5 overflow-y-auto space-y-3.5 flex-1">
-              {/* 이미지 슬라이더 */}
               {promoProduct.images.length > 0 && (
                 <div className="relative rounded-xl overflow-hidden bg-black h-64 flex items-center justify-center">
                   <img
-                    src={promoProduct.images[activeImageIndex] || promoProduct.images[0]}
+                    src={
+                      promoProduct.images[activeImageIndex] ||
+                      promoProduct.images[0]
+                    }
                     alt={promoProduct.name}
                     className="max-h-full max-w-full object-contain"
                   />
@@ -931,8 +1370,20 @@ export default function HongjeStyleCustomerPage() {
                 </div>
               )}
 
-              {/* 상세 스펙 및 설명 */}
               <div className="p-4 rounded-xl bg-[#F2F4F6] text-sm text-[#191F28] leading-relaxed whitespace-pre-wrap">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-xs font-bold ${
+                      promoProduct.category === "DELIVERY"
+                        ? "bg-[#E8F8F0] text-[#03B26C]"
+                        : "bg-[#E8F3FF] text-[#1B64DA]"
+                    }`}
+                  >
+                    {promoProduct.category === "DELIVERY"
+                      ? "🚚 배송 상품"
+                      : "🏬 매장 픽업 상품"}
+                  </span>
+                </div>
                 <div className="font-bold text-base mb-1">
                   {formatKRW(promoProduct.price)} ({promoProduct.unit_label})
                 </div>
@@ -946,7 +1397,6 @@ export default function HongjeStyleCustomerPage() {
               </div>
             </div>
 
-            {/* 하단 주문 / 담기 버튼 */}
             <div className="flex border-t border-[#E5E8EB] shrink-0">
               <button
                 type="button"
