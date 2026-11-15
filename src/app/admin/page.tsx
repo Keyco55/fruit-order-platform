@@ -249,12 +249,14 @@ export default function AdminDashboardPage() {
     const res = await fetch(`/api/admin/products?id=${productId}`, {
       method: "DELETE",
     });
-    if (res.ok) {
-      const data = await res.json();
-      setProducts(data.products);
-      setAggregations(data.aggregations);
-      showToast(`🗑️ '${name}' 상품이 삭제되었습니다.`);
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "상품 삭제에 실패했습니다.");
+      return;
     }
+    setProducts(data.products);
+    setAggregations(data.aggregations);
+    showToast(`🗑️ '${name}' 상품이 삭제되었습니다.`);
   };
 
   // 사진 업로드 및 자동 WebP 압축
