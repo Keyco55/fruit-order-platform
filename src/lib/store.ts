@@ -18,7 +18,7 @@ interface StoreDatabase {
   orders: Order[];
 }
 
-const TMP_STORE_PATH = path.join("/tmp", "fruit-order-platform-store-v1.json");
+const TMP_STORE_PATH = path.join("/tmp", "fruit-order-platform-store-v3.json");
 
 function getTodayDateStr(): string {
   return new Date().toISOString().slice(0, 10);
@@ -37,7 +37,8 @@ export function createInitialSeedData(): StoreDatabase {
       "🍓 오늘 주문건은 오후 2시 이후 매장 픽업 가능합니다. 주문 후 오픈카톡방에 복사된 주문서를 꼭 붙여넣어 주세요!",
     pickup_guide: "매일 10:00 ~ 20:30 (매장 앞 잠시 정차 픽업 가능)",
     bank_account: "카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)",
-    kakao_openchat_url: "https://open.kakao.com",
+    kakao_openchat_url:
+      process.env.NEXT_PUBLIC_KAKAO_OPENCHAT_URL || "https://open.kakao.com/o/g7mQI5Wi",
     admin_pin: "1234",
     show_price: true,
     show_stock: true,
@@ -48,7 +49,7 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-strawberry-1",
       sale_date: today,
-      category: "TODAY",
+      category: "PICKUP",
       name: "논산 설향 딸기 (특품)",
       unit_label: "500g 1팩",
       price: 12900,
@@ -57,7 +58,7 @@ export function createInitialSeedData(): StoreDatabase {
       brix: "14.5 Brix",
       badge_text: "오늘 경매 1등품",
       description:
-        "오늘 새벽 가락시장 경매에서 가장 향이 진하고 알이 굵은 설향 특품만 골라왔습니다. 무른 알 없이 끝까지 달콤합니다.",
+        "오늘 새벽 경매에서 가장 향이 진하고 알이 굵은 설향 특품만 골라왔습니다. 무른 알 없이 끝까지 달콤합니다.",
       images: [
         "https://images.unsplash.com/photo-1464965911861-746a04b4bca6?auto=format&fit=crop&w=900&q=80",
         "https://images.unsplash.com/photo-1543528176-61b239494933?auto=format&fit=crop&w=900&q=80",
@@ -73,7 +74,7 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-shine-2",
       sale_date: today,
-      category: "TODAY",
+      category: "PICKUP",
       name: "김천 고당도 샤인머스켓",
       unit_label: "2kg 1박스 (2~3수)",
       price: 18500,
@@ -97,7 +98,7 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-tangerine-3",
       sale_date: today,
-      category: "TODAY",
+      category: "PICKUP",
       name: "제주 서귀포 타이벡 꿀감귤",
       unit_label: "3kg 1박스 (로얄과)",
       price: 15000,
@@ -121,7 +122,7 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-apple-4",
       sale_date: today,
-      category: "TODAY",
+      category: "PICKUP",
       name: "청송 얼음골 꿀 부사 사과",
       unit_label: "5과 1봉 (특대과)",
       price: 11500,
@@ -144,16 +145,16 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-redhyang-5",
       sale_date: today,
-      category: "RESERVE",
-      name: "[내일입고 예약] 제주 첫수확 레드향",
+      category: "DELIVERY",
+      name: "[산지직송 배송] 제주 첫수확 레드향",
       unit_label: "2.5kg 1박스",
       price: 22000,
       original_price: 27000,
       origin: "제주 애월",
       brix: "15.5 Brix",
-      badge_text: "선주문 5천원 할인",
+      badge_text: "무료배송 특가",
       description:
-        "내일 새벽 제주 산지 직송으로 입고되는 첫수확 레드향입니다. 사전 예약 고객님께만 특가로 드립니다.",
+        "제주 산지에서 바로 문 앞까지 보내드리는 첫수확 고당도 레드향입니다. 사전 예약 고객님께 특가로 배송해 드립니다.",
       images: [
         "https://images.unsplash.com/photo-1582979512210-99b6a53386f9?auto=format&fit=crop&w=900&q=80",
       ],
@@ -168,16 +169,16 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "prod-giftset-6",
       sale_date: today,
-      category: "GIFT_SET",
-      name: "[단톡방 특가] 온가족 제철 과일 3종 세트",
+      category: "DELIVERY",
+      name: "[동네배달/배송] 온가족 제철 과일 3종 세트",
       unit_label: "딸기1팩 + 샤인1송이 + 감귤1.5kg",
       price: 26900,
       original_price: 33500,
       origin: "국내산 특선",
       brix: "프리미엄 선별",
-      badge_text: "🔥 단톡방 1위 인기",
+      badge_text: "🔥 당일배송 인기",
       description:
-        "오늘 가장 맛있는 설향 딸기 1팩, 김천 샤인머스켓 1송이(700g), 타이벡 꿀감귤 1.5kg을 한 번에 맛보실 수 있는 실속 묶음 세트입니다.",
+        "오늘 가장 맛있는 설향 딸기 1팩, 김천 샤인머스켓 1송이(700g), 타이벡 꿀감귤 1.5kg을 문 앞까지 안전하게 배송해 드립니다.",
       images: [
         "https://images.unsplash.com/photo-1610832958506-aa56368176cf?auto=format&fit=crop&w=900&q=80",
       ],
@@ -196,7 +197,10 @@ export function createInitialSeedData(): StoreDatabase {
       id: "ord-demo-1001",
       order_date: today,
       kakao_nickname: "과일사랑",
+      customer_phone: "010-2345-1234",
       customer_phone_last4: "1234",
+      fulfillment_type: "PICKUP",
+      delivery_address: "",
       total_amount: 44300,
       status: "READY",
       is_paid: true,
@@ -230,8 +234,11 @@ export function createInitialSeedData(): StoreDatabase {
     {
       id: "ord-demo-1002",
       order_date: today,
-      kakao_nickname: "홍제동맘",
+      kakao_nickname: "유천동맘",
+      customer_phone: "010-3456-5678",
       customer_phone_last4: "5678",
+      fulfillment_type: "PICKUP",
+      delivery_address: "",
       total_amount: 41500,
       status: "RESERVED",
       is_paid: true,
@@ -266,20 +273,23 @@ export function createInitialSeedData(): StoreDatabase {
       id: "ord-demo-1003",
       order_date: today,
       kakao_nickname: "단골손님김씨",
+      customer_phone: "010-4567-9012",
       customer_phone_last4: "9012",
+      fulfillment_type: "DELIVERY",
+      delivery_address: "유천로 104번길 12, 102동 504호",
       total_amount: 39800,
       status: "PICKED_UP",
       is_paid: true,
       source: "WEB",
-      pickup_time: "오늘 14:00 방문",
-      memo: "",
+      pickup_time: "오후 당일배송",
+      memo: "문 앞에 두고 문자 주세요",
       created_at: new Date(Date.now() - 1000 * 60 * 140).toISOString(),
       items: [
         {
           id: "item-105",
           order_id: "ord-demo-1003",
           product_id: "prod-giftset-6",
-          product_name: "[단톡방 특가] 온가족 제철 과일 3종 세트",
+          product_name: "[동네배달/배송] 온가족 제철 과일 3종 세트",
           unit_label: "딸기1팩 + 샤인1송이 + 감귤1.5kg",
           unit_price: 26900,
           quantity: 1,
@@ -301,20 +311,23 @@ export function createInitialSeedData(): StoreDatabase {
       id: "ord-demo-1004",
       order_date: today,
       kakao_nickname: "초코우유",
+      customer_phone: "010-5678-3456",
       customer_phone_last4: "3456",
+      fulfillment_type: "DELIVERY",
+      delivery_address: "유천동 현대아파트 201동 1102호",
       total_amount: 44000,
       status: "RESERVED",
       is_paid: false,
       source: "WEB",
-      pickup_time: "내일 오후 픽업",
-      memo: "입고되면 알림 부탁드려요",
+      pickup_time: "내일 택배발송",
+      memo: "발송 시 송장 안내 부탁드려요",
       created_at: new Date(Date.now() - 1000 * 60 * 28).toISOString(),
       items: [
         {
           id: "item-107",
           order_id: "ord-demo-1004",
           product_id: "prod-redhyang-5",
-          product_name: "[내일입고 예약] 제주 첫수확 레드향",
+          product_name: "[산지직송 배송] 제주 첫수확 레드향",
           unit_label: "2.5kg 1박스",
           unit_price: 22000,
           quantity: 2,
@@ -326,7 +339,10 @@ export function createInitialSeedData(): StoreDatabase {
       id: "ord-demo-1005",
       order_date: today,
       kakao_nickname: "햇살가득",
+      customer_phone: "010-6789-7788",
       customer_phone_last4: "7788",
+      fulfillment_type: "PICKUP",
+      delivery_address: "",
       total_amount: 25800,
       status: "RESERVED",
       is_paid: false,
@@ -422,8 +438,13 @@ export function getProducts(options?: { includeHidden?: boolean }): Product[] {
   return list.filter((p) => p.is_visible);
 }
 
+function normalizePhoneDigits(value?: string): string {
+  return (value ?? "").replace(/\D/g, "");
+}
+
 export function getOrders(options?: {
   nickname?: string;
+  phone?: string;
   phoneLast4?: string;
   includeCanceled?: boolean;
 }): Order[] {
@@ -440,19 +461,32 @@ export function getOrders(options?: {
     })),
   }));
 
-  if (options?.nickname) {
+  if (options?.nickname && options.nickname.trim()) {
     const targetNick = options.nickname.trim().toLowerCase().replace(/\s+/g, "");
-    orders = orders.filter(
-      (o) =>
-        o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "") === targetNick
+    orders = orders.filter((o) =>
+      o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "").includes(targetNick)
     );
   }
 
-  if (options?.phoneLast4 && options.phoneLast4.trim()) {
-    const targetPhone = options.phoneLast4.trim();
-    orders = orders.filter(
-      (o) => !o.customer_phone_last4 || o.customer_phone_last4 === targetPhone
-    );
+  const queryPhoneDigits = normalizePhoneDigits(options?.phone ?? options?.phoneLast4);
+  if (queryPhoneDigits) {
+    orders = orders.filter((o) => {
+      const storedDigits = normalizePhoneDigits(o.customer_phone);
+      const last4Digits = normalizePhoneDigits(o.customer_phone_last4);
+      if (storedDigits) {
+        return (
+          storedDigits === queryPhoneDigits ||
+          storedDigits.endsWith(queryPhoneDigits)
+        );
+      }
+      if (last4Digits) {
+        return (
+          last4Digits === queryPhoneDigits ||
+          queryPhoneDigits.endsWith(last4Digits)
+        );
+      }
+      return false;
+    });
   }
 
   if (options?.includeCanceled === false) {
@@ -569,16 +603,34 @@ export function createOrder(input: CreateOrderInput): Order {
     };
   });
 
+  const inferredFulfillment =
+    input.fulfillment_type ??
+    (validatedItems.every(({ product }) => product.category === "DELIVERY")
+      ? "DELIVERY"
+      : "PICKUP");
+
+  const rawPhone = (input.customer_phone ?? "").trim();
+  const phoneDigits = normalizePhoneDigits(rawPhone);
+  const derivedLast4 =
+    (input.customer_phone_last4 ?? "").trim() ||
+    (phoneDigits.length >= 4 ? phoneDigits.slice(-4) : phoneDigits);
+
   const newOrder: Order = {
     id: orderId,
     order_date: getTodayDateStr(),
     kakao_nickname: nickname,
-    customer_phone_last4: (input.customer_phone_last4 ?? "").trim(),
+    customer_phone: rawPhone,
+    customer_phone_last4: derivedLast4,
+    fulfillment_type: inferredFulfillment,
+    delivery_address: (input.delivery_address ?? "").trim(),
     total_amount: totalAmount,
     status: "RESERVED",
     is_paid: false,
     source: input.source ?? "WEB",
-    pickup_time: (input.pickup_time ?? "오늘 오후 방문").trim(),
+    pickup_time: (
+      input.pickup_time ??
+      (inferredFulfillment === "DELIVERY" ? "순차 배송 예정" : "오늘 오후 방문")
+    ).trim(),
     memo: (input.memo ?? "").trim(),
     created_at: new Date().toISOString(),
     items: orderItems,

@@ -8,8 +8,10 @@ import {
 } from "../src/lib/formatters";
 import {
   createOrder,
+  getOrders,
   getProductAggregations,
   getProducts,
+  getStoreSettings,
   resetDemoDatabase,
   updateOrderAdmin,
 } from "../src/lib/store";
@@ -110,5 +112,59 @@ describe("과일 주문 및 오픈카톡 자동 집계 코어 로직 검증", ()
     // 시드 데이터의 설향 딸기 주문 합계: 과일사랑(2) + 단골손님김씨(1) + 햇살가득(2) = 5개
     assert.equal(strawberryAgg.ordered_quantity, 5);
     assert.equal(strawberryAgg.order_count, 3);
+    assert.equal(strawberryAgg.category, "PICKUP");
+  });
+
+  it("배송 주문 생성 시 수령방식(DELIVERY)과 배송지가 클립보드 텍스트에 반영되어야 한다", () => {
+    const deliveryOrder = createOrder({
+      kakao_nickname: "유천배달",
+      fulfillment_type: "DELIVERY",
+      delivery_address: "유천동 현대아파트 101동 502호",
+      items: [{ product_id: "prod-redhyang-5", quantity: 1 }],
+    });
+
+    assert.equal(deliveryOrder.fulfillment_type, "DELIVERY");
+    assert.equal(
+      deliveryOrder.delivery_address,
+      "유천동 현대아파트 101동 502호"
+    );
+
+    const clipboardText = formatOrderClipboardText(deliveryOrder);
+    assert.match(clipboardText, /🚚 배송/);
+    assert.match(clipboardText, /배송지: 유천동 현대아파트 101동 502호/);
+  });
+
+  it("주문 연락처 저장 시 뒷4자리가 자동 추출되고 닉네임+연락처로 주문을 조회할 수 있어야 한다", () => {
+    const settings = getStoreSettings();
+    assert.equal(settings.kakao_openchat_url, "https://open.kakao.com/o/g7mQI5Wi");
+
+    const created = createOrder({
+      kakao_nickname: "후르츠단골",
+      customer_phone: "010-9876-5432",
+      items: [{ product_id: "prod-strawberry-1", quantity: 1 }],
+    });
+
+    assert.equal(created.customer_phone, "010-9876-5432");
+    assert.equal(created.customer_phone_last4, "5432");
+
+    const byFullPhone = getOrders({
+      nickname: "후르츠단골",
+      phone: "01098765432",
+    });
+    assert.equal(byFullPhone.length, 1);
+    assert.equal(byFullPhone[0].id, created.id);
+
+    const byLast4 = getOrders({
+      nickname: "후르츠단골",
+      phone: "5432",
+    });
+    assert.equal(byLast4.length, 1);
+    assert.equal(byLast4[0].id, created.id);
+
+    const mismatchedPhone = getOrders({
+      nickname: "후르츠단골",
+      phone: "010-0000-0000",
+    });
+    assert.equal(mismatchedPhone.length, 0);
   });
 });

@@ -8,10 +8,12 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const nickname = searchParams.get("nickname") ?? undefined;
+  const phone = searchParams.get("phone") ?? undefined;
   const phoneLast4 = searchParams.get("phoneLast4") ?? undefined;
 
   const orders = getOrders({
     nickname,
+    phone,
     phoneLast4,
     includeCanceled: true,
   });
@@ -30,6 +32,7 @@ export async function POST(request: NextRequest) {
     const updatedProducts = getProducts({ includeHidden: false });
     const myOrders = getOrders({
       nickname: order.kakao_nickname,
+      phone: order.customer_phone || order.customer_phone_last4 || undefined,
       includeCanceled: true,
     });
 

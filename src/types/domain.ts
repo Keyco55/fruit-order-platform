@@ -1,4 +1,6 @@
-export type ProductCategory = "TODAY" | "RESERVE" | "GIFT_SET";
+export type ProductCategory = "PICKUP" | "DELIVERY";
+
+export type FulfillmentType = "PICKUP" | "DELIVERY";
 
 export type OrderStatus = "RESERVED" | "READY" | "PICKED_UP" | "CANCELED";
 
@@ -57,7 +59,10 @@ export interface Order {
   id: string;
   order_date: string; // YYYY-MM-DD
   kakao_nickname: string;
+  customer_phone?: string;
   customer_phone_last4: string;
+  fulfillment_type: FulfillmentType;
+  delivery_address?: string;
   total_amount: number;
   status: OrderStatus;
   is_paid: boolean;
@@ -87,7 +92,10 @@ export interface ProductAggregation {
 
 export interface CreateOrderInput {
   kakao_nickname: string;
+  customer_phone?: string;
   customer_phone_last4?: string;
+  fulfillment_type?: FulfillmentType;
+  delivery_address?: string;
   pickup_time?: string;
   memo?: string;
   source?: OrderSource;
