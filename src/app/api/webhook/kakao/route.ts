@@ -4,7 +4,7 @@ import {
   getOrders,
   getProductAggregations,
   getProducts,
-} from "@/lib/store";
+} from "@/lib/repository";
 import { formatKRW, parseKakaoChatMessage } from "@/lib/formatters";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const products = getProducts({ includeHidden: false });
+    const products = await getProducts({ includeHidden: false });
     const parsedItems = parseKakaoChatMessage(message, products);
 
     if (parsedItems.length === 0) {
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const order = createOrder({
+    const order = await createOrder({
       kakao_nickname: sender,
       customer_phone_last4: body.phoneLast4 ?? "",
       source: "KAKAO_BOT",
@@ -58,13 +58,19 @@ export async function POST(request: NextRequest) {
       .map((i) => `${i.product_name} ${i.quantity}개`)
       .join(", ");
 
+    const [orders, allProducts, aggregations] = await Promise.all([
+      getOrders({ includeCanceled: true }),
+      getProducts({ includeHidden: true }),
+      getProductAggregations(),
+    ]);
+
     return NextResponse.json({
       matched: true,
       order,
       reply: `🍎 [${sender}]님 주문 자동 집계 완료!\n- 내역: ${summaryText}\n- 합계: ${formatKRW(order.total_amount)}`,
-      orders: getOrders({ includeCanceled: true }),
-      products: getProducts({ includeHidden: true }),
-      aggregations: getProductAggregations(),
+      orders,
+      products: allProducts,
+      aggregations,
     });
   } catch (err) {
     const message =

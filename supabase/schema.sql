@@ -78,3 +78,290 @@ create index if not exists idx_orders_nickname on public.orders(kakao_nickname, 
 create index if not exists idx_orders_order_date on public.orders(order_date, created_at desc);
 create index if not exists idx_order_items_order_id on public.order_items(order_id);
 create index if not exists idx_order_items_product_id on public.order_items(product_id);
+
+-- ============================================================================
+-- RLS (Row Level Security) 활성화
+-- - Next.js API Route(서버)에서 SUPABASE_SERVICE_ROLE_KEY로 접근하며,
+--   admin_pin / 고객 연락처 보호를 위해 anon 직접 접근은 차단합니다.
+-- ============================================================================
+alter table public.store_settings enable row level security;
+alter table public.products enable row level security;
+alter table public.orders enable row level security;
+alter table public.order_items enable row level security;
+
+-- ============================================================================
+-- 원자적 주문 생성 RPC (재고 동시성 제어 및 트랜잭션 보장)
+-- ============================================================================
+create or replace function public.create_fruit_order(
+  p_kakao_nickname text,
+  p_customer_phone text default '',
+  p_customer_phone_last4 text default '',
+  p_fulfillment_type text default null,
+  p_delivery_address text default '',
+  p_pickup_time text default null,
+  p_memo text default '',
+  p_source text default 'WEB',
+  p_items jsonb default '[]'::jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_nickname text := trim(coalesce(p_kakao_nickname, ''));
+  v_order_id uuid;
+  v_total_amount integer := 0;
+  v_all_delivery boolean := true;
+  v_valid_count integer := 0;
+  v_fulfillment text;
+  v_raw_phone text := trim(coalesce(p_customer_phone, ''));
+  v_phone_digits text;
+  v_last4 text;
+  v_pickup_time text;
+  v_source text;
+  v_item record;
+  v_product public.products%rowtype;
+  v_subtotal integer;
+begin
+  if v_nickname = '' then
+    raise exception '오픈카톡 닉네임을 입력해 주세요.';
+  end if;
+
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception '주문할 과일을 1개 이상 선택해 주세요.';
+  end if;
+
+  -- 동일 상품이 여러 줄로 들어온 경우 합산 후 product_id 순으로 잠금 (데드락 방지)
+  for v_item in
+    select
+      (elem->>'product_id')::uuid as product_id,
+      sum((elem->>'quantity')::integer)::integer as quantity
+    from jsonb_array_elements(p_items) as elem
+    where coalesce((elem->>'quantity')::integer, 0) > 0
+    group by (elem->>'product_id')::uuid
+    order by (elem->>'product_id')::uuid
+  loop
+    v_valid_count := v_valid_count + 1;
+
+    select *
+    into v_product
+    from public.products
+    where id = v_item.product_id
+    for update;
+
+    if not found or not v_product.is_visible then
+      raise exception '존재하지 않거나 판매 종료된 과일이 포함되어 있습니다.';
+    end if;
+
+    if v_product.is_limited and v_product.remain_stock < v_item.quantity then
+      raise exception '''%'' 상품의 남은 수량(%개)이 부족합니다.', v_product.name, v_product.remain_stock;
+    end if;
+
+    if v_product.category <> 'DELIVERY' then
+      v_all_delivery := false;
+    end if;
+
+    if v_product.is_limited then
+      update public.products
+      set remain_stock = greatest(0, remain_stock - v_item.quantity)
+      where id = v_product.id;
+    end if;
+
+    v_total_amount := v_total_amount + (v_product.price * v_item.quantity);
+  end loop;
+
+  if v_valid_count = 0 then
+    raise exception '유효한 주문 수량이 없습니다.';
+  end if;
+
+  if p_fulfillment_type in ('PICKUP', 'DELIVERY') then
+    v_fulfillment := p_fulfillment_type;
+  elsif v_all_delivery then
+    v_fulfillment := 'DELIVERY';
+  else
+    v_fulfillment := 'PICKUP';
+  end if;
+
+  v_phone_digits := regexp_replace(v_raw_phone, '[^0-9]', '', 'g');
+  v_last4 := trim(coalesce(p_customer_phone_last4, ''));
+  if v_last4 = '' then
+    if length(v_phone_digits) >= 4 then
+      v_last4 := right(v_phone_digits, 4);
+    else
+      v_last4 := v_phone_digits;
+    end if;
+  end if;
+
+  v_pickup_time := trim(coalesce(p_pickup_time, ''));
+  if v_pickup_time = '' then
+    if v_fulfillment = 'DELIVERY' then
+      v_pickup_time := '순차 배송 예정';
+    else
+      v_pickup_time := '오늘 오후 방문';
+    end if;
+  end if;
+
+  v_source := case when p_source = 'KAKAO_BOT' then 'KAKAO_BOT' else 'WEB' end;
+
+  insert into public.orders (
+    order_date,
+    kakao_nickname,
+    customer_phone,
+    customer_phone_last4,
+    fulfillment_type,
+    delivery_address,
+    total_amount,
+    status,
+    is_paid,
+    source,
+    pickup_time,
+    memo
+  )
+  values (
+    (now() at time zone 'Asia/Seoul')::date,
+    v_nickname,
+    v_raw_phone,
+    v_last4,
+    v_fulfillment,
+    trim(coalesce(p_delivery_address, '')),
+    v_total_amount,
+    'RESERVED',
+    false,
+    v_source,
+    v_pickup_time,
+    trim(coalesce(p_memo, ''))
+  )
+  returning id into v_order_id;
+
+  for v_item in
+    select
+      (elem->>'product_id')::uuid as product_id,
+      sum((elem->>'quantity')::integer)::integer as quantity
+    from jsonb_array_elements(p_items) as elem
+    where coalesce((elem->>'quantity')::integer, 0) > 0
+    group by (elem->>'product_id')::uuid
+    order by (elem->>'product_id')::uuid
+  loop
+    select * into v_product from public.products where id = v_item.product_id;
+    v_subtotal := v_product.price * v_item.quantity;
+
+    insert into public.order_items (
+      order_id,
+      product_id,
+      product_name,
+      unit_label,
+      unit_price,
+      quantity,
+      subtotal
+    )
+    values (
+      v_order_id,
+      v_product.id,
+      v_product.name,
+      v_product.unit_label,
+      v_product.price,
+      v_item.quantity,
+      v_subtotal
+    );
+  end loop;
+
+  return v_order_id;
+end;
+$$;
+
+-- ============================================================================
+-- 원자적 관리자 주문 상태 변경 RPC (취소 시 재고 복원 / 복구 시 재차감 보장)
+-- ============================================================================
+create or replace function public.update_fruit_order_admin(
+  p_order_id uuid,
+  p_status text default null,
+  p_is_paid boolean default null,
+  p_memo text default null,
+  p_pickup_time text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_prev_status text;
+  v_next_status text;
+  v_item record;
+  v_product public.products%rowtype;
+begin
+  select *
+  into v_order
+  from public.orders
+  where id = p_order_id
+  for update;
+
+  if not found then
+    raise exception '주문을 찾을 수 없습니다.';
+  end if;
+
+  v_prev_status := v_order.status;
+  v_next_status := coalesce(p_status, v_prev_status);
+
+  if v_next_status not in ('RESERVED', 'READY', 'PICKED_UP', 'CANCELED') then
+    raise exception '유효하지 않은 주문 상태입니다: %', v_next_status;
+  end if;
+
+  -- 취소로 변경 시 한정 수량 재고 복원
+  if v_prev_status <> 'CANCELED' and v_next_status = 'CANCELED' then
+    for v_item in
+      select product_id, sum(quantity)::integer as quantity
+      from public.order_items
+      where order_id = p_order_id
+      group by product_id
+      order by product_id
+    loop
+      select * into v_product from public.products where id = v_item.product_id for update;
+      if found and v_product.is_limited then
+        update public.products
+        set remain_stock = least(total_stock, remain_stock + v_item.quantity)
+        where id = v_product.id;
+      end if;
+    end loop;
+  end if;
+
+  -- 취소 상태에서 활성 상태로 복구 시 재고 재차감
+  if v_prev_status = 'CANCELED' and v_next_status <> 'CANCELED' then
+    for v_item in
+      select product_id, sum(quantity)::integer as quantity
+      from public.order_items
+      where order_id = p_order_id
+      group by product_id
+      order by product_id
+    loop
+      select * into v_product from public.products where id = v_item.product_id for update;
+      if found and v_product.is_limited then
+        if v_product.remain_stock < v_item.quantity then
+          raise exception '''%'' 재고가 부족하여 주문을 복구할 수 없습니다.', v_product.name;
+        end if;
+        update public.products
+        set remain_stock = remain_stock - v_item.quantity
+        where id = v_product.id;
+      end if;
+    end loop;
+  end if;
+
+  update public.orders
+  set
+    status = v_next_status,
+    is_paid = coalesce(p_is_paid, is_paid),
+    memo = coalesce(p_memo, memo),
+    pickup_time = coalesce(p_pickup_time, pickup_time)
+  where id = p_order_id;
+
+  return p_order_id;
+end;
+$$;
+
+revoke all on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb) to service_role;
+
+revoke all on function public.update_fruit_order_admin(uuid, text, boolean, text, text) from public, anon, authenticated;
+grant execute on function public.update_fruit_order_admin(uuid, text, boolean, text, text) to service_role;

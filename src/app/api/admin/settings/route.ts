@@ -6,7 +6,7 @@ import {
   getStoreSettings,
   resetDemoDatabase,
   updateStoreSettings,
-} from "@/lib/store";
+} from "@/lib/repository";
 import type { StoreSettings } from "@/types/domain";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (body.action === "verify_pin") {
-      const settings = getStoreSettings();
+      const settings = await getStoreSettings();
       const isValid = body.pin === settings.admin_pin;
       if (!isValid) {
         return NextResponse.json(
@@ -31,13 +31,19 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === "reset_demo") {
-      const db = resetDemoDatabase();
+      const db = await resetDemoDatabase();
+      const [products, orders, aggregations] = await Promise.all([
+        getProducts({ includeHidden: true }),
+        getOrders({ includeCanceled: true }),
+        getProductAggregations(),
+      ]);
+
       return NextResponse.json({
         ok: true,
         settings: db.settings,
-        products: getProducts({ includeHidden: true }),
-        orders: getOrders({ includeCanceled: true }),
-        aggregations: getProductAggregations(),
+        products,
+        orders,
+        aggregations,
       });
     }
 
@@ -52,7 +58,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const patch = (await request.json()) as Partial<StoreSettings>;
-    const updated = updateStoreSettings(patch);
+    const updated = await updateStoreSettings(patch);
     return NextResponse.json({ settings: updated });
   } catch (err) {
     const message =

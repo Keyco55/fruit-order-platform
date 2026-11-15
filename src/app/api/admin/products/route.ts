@@ -5,7 +5,7 @@ import {
   getProductAggregations,
   getProducts,
   updateProductAdmin,
-} from "@/lib/store";
+} from "@/lib/repository";
 import type { CreateProductInput, Product } from "@/types/domain";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +20,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const product = createProductAdmin(body);
+    const product = await createProductAdmin(body);
+    const [products, aggregations] = await Promise.all([
+      getProducts({ includeHidden: true }),
+      getProductAggregations(),
+    ]);
+
     return NextResponse.json(
       {
         product,
-        products: getProducts({ includeHidden: true }),
-        aggregations: getProductAggregations(),
+        products,
+        aggregations,
       },
       { status: 201 }
     );
@@ -50,11 +55,16 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const updated = updateProductAdmin(body.id, body.patch);
+    const updated = await updateProductAdmin(body.id, body.patch);
+    const [products, aggregations] = await Promise.all([
+      getProducts({ includeHidden: true }),
+      getProductAggregations(),
+    ]);
+
     return NextResponse.json({
       product: updated,
-      products: getProducts({ includeHidden: true }),
-      aggregations: getProductAggregations(),
+      products,
+      aggregations,
     });
   } catch (err) {
     const message =
@@ -64,18 +74,29 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
-  if (!id) {
-    return NextResponse.json(
-      { error: "삭제할 상품 ID가 필요합니다." },
-      { status: 400 }
-    );
-  }
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+    if (!id) {
+      return NextResponse.json(
+        { error: "삭제할 상품 ID가 필요합니다." },
+        { status: 400 }
+      );
+    }
 
-  deleteProductAdmin(id);
-  return NextResponse.json({
-    products: getProducts({ includeHidden: true }),
-    aggregations: getProductAggregations(),
-  });
+    await deleteProductAdmin(id);
+    const [products, aggregations] = await Promise.all([
+      getProducts({ includeHidden: true }),
+      getProductAggregations(),
+    ]);
+
+    return NextResponse.json({
+      products,
+      aggregations,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "상품 삭제에 실패했습니다.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 }

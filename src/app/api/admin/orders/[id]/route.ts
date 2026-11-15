@@ -4,7 +4,7 @@ import {
   getProductAggregations,
   getProducts,
   updateOrderAdmin,
-} from "@/lib/store";
+} from "@/lib/repository";
 import type { OrderStatus } from "@/types/domain";
 
 export const dynamic = "force-dynamic";
@@ -22,12 +22,18 @@ export async function PATCH(
       pickup_time?: string;
     };
 
-    const order = updateOrderAdmin(id, body);
+    const order = await updateOrderAdmin(id, body);
+    const [orders, products, aggregations] = await Promise.all([
+      getOrders({ includeCanceled: true }),
+      getProducts({ includeHidden: true }),
+      getProductAggregations(),
+    ]);
+
     return NextResponse.json({
       order,
-      orders: getOrders({ includeCanceled: true }),
-      products: getProducts({ includeHidden: true }),
-      aggregations: getProductAggregations(),
+      orders,
+      products,
+      aggregations,
     });
   } catch (err) {
     const message =
