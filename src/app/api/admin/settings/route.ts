@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  clearAdminSessionCookie,
+  isAdminRequestAuthenticated,
+  setAdminSessionCookie,
+} from "@/lib/admin-auth";
+import {
   getOrders,
   getProductAggregations,
   getProducts,
@@ -14,7 +19,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
-      action: "verify_pin" | "reset_demo";
+      action: "verify_pin" | "logout" | "reset_demo";
       pin?: string;
     };
 
@@ -23,11 +28,26 @@ export async function POST(request: NextRequest) {
       const isValid = body.pin === settings.admin_pin;
       if (!isValid) {
         return NextResponse.json(
-          { ok: false, error: "PIN 번호가 일치하지 않습니다. (프로토타입 기본값: 1234)" },
+          { ok: false, error: "관리자 비밀번호가 일치하지 않습니다." },
           { status: 401 }
         );
       }
-      return NextResponse.json({ ok: true });
+      const response = NextResponse.json({ ok: true });
+      setAdminSessionCookie(request, response);
+      return response;
+    }
+
+    if (body.action === "logout") {
+      const response = NextResponse.json({ ok: true });
+      clearAdminSessionCookie(request, response);
+      return response;
+    }
+
+    if (!isAdminRequestAuthenticated(request)) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 }
+      );
     }
 
     if (body.action === "reset_demo") {
@@ -56,8 +76,21 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  if (!isAdminRequestAuthenticated(request)) {
+    return NextResponse.json(
+      { error: "관리자 인증이 필요합니다." },
+      { status: 401 }
+    );
+  }
+
   try {
     const patch = (await request.json()) as Partial<StoreSettings>;
+    if (patch.admin_pin !== undefined && !patch.admin_pin.trim()) {
+      return NextResponse.json(
+        { error: "관리자 비밀번호는 비워둘 수 없습니다." },
+        { status: 400 }
+      );
+    }
     const updated = await updateStoreSettings(patch);
     return NextResponse.json({ settings: updated });
   } catch (err) {

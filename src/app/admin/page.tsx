@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   BarChart3,
   PackagePlus,
@@ -22,8 +23,9 @@ import {
   PackageCheck,
   XCircle,
   RotateCcw,
+  Store,
+  ShieldCheck,
 } from "lucide-react";
-import { DemoSwitchBar } from "@/components/DemoSwitchBar";
 import {
   formatKRW,
   formatKakaoNoticeText,
@@ -103,9 +105,12 @@ const QUICK_FRUIT_PRESETS = [
 ];
 
 export default function AdminDashboardPage() {
-  // 프로토타입 시연 편의를 위해 기본 인증 완료 상태로 시작하되, PIN 잠금화면도 체험 가능
-  const [isUnlocked, setIsUnlocked] = useState(true);
-  const [pinInput, setPinInput] = useState("1234");
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
+  const [dataMode, setDataMode] = useState<"supabase" | "demo" | null>(null);
   const [activeTab, setActiveTab] = useState<AdminTab>("DASHBOARD");
 
   const [settings, setSettings] = useState<StoreSettings | null>(null);
@@ -153,12 +158,19 @@ export default function AdminDashboardPage() {
   const fetchAdminData = useCallback(async () => {
     try {
       const res = await fetch("/api/bootstrap?admin=1", { cache: "no-store" });
-      if (!res.ok) return;
+      if (res.status === 401) {
+        setIsUnlocked(false);
+        return false;
+      }
+      if (!res.ok) return false;
       const data = await res.json();
+      setDataMode(data.mode ?? null);
       setSettings(data.settings);
       setProducts(data.products ?? []);
       setOrders(data.orders ?? []);
       setAggregations(data.aggregations ?? []);
+      setIsUnlocked(true);
+      return true;
     } finally {
       setLoading(false);
     }
@@ -168,21 +180,52 @@ export default function AdminDashboardPage() {
     void fetchAdminData();
   }, [fetchAdminData]);
 
-  // PIN 로그인 검증
+  // 관리자 비밀번호 인증
   const handleVerifyPin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch("/api/admin/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "verify_pin", pin: pinInput }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      showToast(data.error || "PIN 번호가 일치하지 않습니다.");
+    if (!pinInput.trim()) {
+      setAuthError("비밀번호를 입력해 주세요.");
       return;
     }
-    setIsUnlocked(true);
-    showToast("🔓 사장님 관리자 모드로 접속되었습니다.");
+
+    setIsVerifyingPin(true);
+    setAuthError(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "verify_pin", pin: pinInput }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        const msg = data.error || "관리자 비밀번호가 일치하지 않습니다.";
+        setAuthError(msg);
+        showToast(msg);
+        return;
+      }
+      setPinInput("");
+      await fetchAdminData();
+      setIsUnlocked(true);
+      showToast("🔓 사장님 관리자 모드로 접속되었습니다.");
+    } finally {
+      setIsVerifyingPin(false);
+    }
+  };
+
+  // 관리자 잠금 (세션 로그아웃)
+  const handleLockAdmin = async () => {
+    await fetch("/api/admin/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "logout" }),
+    });
+    setIsUnlocked(false);
+    setPinInput("");
+    setAuthError(null);
+    setSettings(null);
+    setProducts([]);
+    setOrders([]);
+    setAggregations([]);
   };
 
   // 데모 데이터 초기화
@@ -352,15 +395,21 @@ export default function AdminDashboardPage() {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!settings) return;
+    if (!settings.admin_pin.trim()) {
+      showToast("관리자 비밀번호는 비워둘 수 없습니다.");
+      return;
+    }
     const res = await fetch("/api/admin/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
+    const data = await res.json();
     if (res.ok) {
-      const data = await res.json();
       setSettings(data.settings);
-      showToast("💾 매장 설정 및 오픈카톡 링크가 저장되었습니다!");
+      showToast("💾 매장 설정 및 비밀번호가 저장되었습니다!");
+    } else {
+      showToast(data.error || "설정 저장에 실패했습니다.");
     }
   };
 
@@ -436,11 +485,36 @@ export default function AdminDashboardPage() {
     return formatKakaoNoticeText(settings, products, origin);
   }, [settings, products]);
 
-  // PIN 잠금 화면
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+        <p className="text-sm text-slate-300 font-semibold">
+          관리자 인증 상태를 확인하는 중...
+        </p>
+      </div>
+    );
+  }
+
+  // 관리자 비밀번호 잠금 화면
   if (!isUnlocked) {
     return (
       <div className="min-h-screen bg-slate-900 text-white">
-        <DemoSwitchBar />
+        <header className="sticky top-0 z-50 bg-[#191f28] text-white border-b border-slate-800 shadow-sm">
+          <div className="max-w-3xl mx-auto px-3 py-2.5 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span className="font-bold text-slate-100">사장님 전용 관리자</span>
+            </div>
+            <Link
+              href="/"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition"
+            >
+              <Store className="w-3.5 h-3.5" />
+              <span>손님 주문 화면</span>
+            </Link>
+          </div>
+        </header>
+
         <div className="max-w-sm mx-auto px-4 pt-20">
           <form
             onSubmit={handleVerifyPin}
@@ -452,22 +526,41 @@ export default function AdminDashboardPage() {
             <div>
               <h1 className="text-lg font-extrabold">사장님 전용 관리자 인증</h1>
               <p className="text-xs text-slate-400 mt-1">
-                프로토타입 기본 PIN 번호는 <strong>1234</strong> 입니다.
+                관리자 비밀번호를 입력해야 장부와 상품 관리에 접근할 수 있습니다.
               </p>
             </div>
-            <input
-              type="password"
-              inputMode="numeric"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              placeholder="PIN 4자리 입력"
-              className="w-full text-center text-2xl tracking-widest font-black py-3 rounded-2xl bg-slate-900 border border-slate-700 focus:outline-none focus:border-emerald-500"
-            />
+            <div className="relative">
+              <input
+                type={showPin ? "text" : "password"}
+                inputMode="text"
+                autoComplete="current-password"
+                autoFocus
+                value={pinInput}
+                onChange={(e) => {
+                  setPinInput(e.target.value);
+                  if (authError) setAuthError(null);
+                }}
+                placeholder="관리자 비밀번호 입력"
+                className="w-full text-center text-lg tracking-wider font-bold py-3 px-10 rounded-2xl bg-slate-900 border border-slate-700 focus:outline-none focus:border-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPin((prev) => !prev)}
+                aria-label={showPin ? "비밀번호 숨기기" : "비밀번호 보기"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1"
+              >
+                {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            {authError && (
+              <p className="text-xs font-semibold text-rose-400">{authError}</p>
+            )}
             <button
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-sm transition"
+              disabled={isVerifyingPin}
+              className="w-full py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-extrabold text-sm transition"
             >
-              관리자 페이지 입장
+              {isVerifyingPin ? "인증 확인 중..." : "관리자 페이지 입장"}
             </button>
           </form>
         </div>
@@ -477,7 +570,45 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="min-h-screen pb-20">
-      <DemoSwitchBar />
+      <header className="sticky top-0 z-50 bg-[#191f28] text-white border-b border-slate-800 shadow-sm">
+        <div className="max-w-3xl mx-auto px-3 py-2 flex items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+              <ShieldCheck className="w-3 h-3" />
+              <span>사장님 관리자</span>
+            </span>
+            {dataMode && (
+              <span
+                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 ${
+                  dataMode === "supabase"
+                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                    : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                }`}
+              >
+                {dataMode === "supabase" ? "Supabase 실DB" : "데모 모드"}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Link
+              href="/"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition"
+            >
+              <Store className="w-3.5 h-3.5" />
+              <span>손님 주문 화면</span>
+            </Link>
+            <button
+              type="button"
+              onClick={handleLockAdmin}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-600/80 text-slate-200 font-semibold transition"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>잠금</span>
+            </button>
+          </div>
+        </div>
+      </header>
 
       {toastMessage && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md bg-[#191f28] text-white px-4 py-3 rounded-2xl shadow-xl text-sm font-medium flex items-center gap-2">
@@ -527,7 +658,8 @@ export default function AdminDashboardPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setIsUnlocked(false)}
+                onClick={handleLockAdmin}
+                title="관리자 화면을 잠그고 로그아웃합니다"
                 className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-500 text-xs font-semibold hover:bg-slate-200"
               >
                 <Lock className="w-3.5 h-3.5" />
@@ -1534,7 +1666,7 @@ export default function AdminDashboardPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  사장님 관리자 PIN 번호
+                  사장님 관리자 비밀번호
                 </label>
                 <input
                   type="text"
@@ -1542,7 +1674,7 @@ export default function AdminDashboardPage() {
                   onChange={(e) =>
                     setSettings({ ...settings, admin_pin: e.target.value })
                   }
-                  className="w-40 px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm font-bold"
+                  className="w-48 px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm font-bold"
                 />
               </div>
 
