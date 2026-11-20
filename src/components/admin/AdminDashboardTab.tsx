@@ -7,8 +7,6 @@ import type { Order, Product, ProductAggregation } from "@/types/domain";
 
 export type QuickOrderFilter =
   | "ALL"
-  | "PICKUP"
-  | "DELIVERY"
   | "WAITING"
   | "READY"
   | "PICKED_UP"
@@ -39,14 +37,13 @@ export function AdminDashboardTab({
   onJumpToOrders,
 }: AdminDashboardTabProps) {
   const [chartMetric, setChartMetric] = useState<"QTY" | "REVENUE">("QTY");
-  const [categoryFilter, setCategoryFilter] = useState<"ALL" | "PICKUP" | "DELIVERY">("ALL");
 
   const activeOrders = useMemo(
     () => orders.filter((o) => o.status !== "CANCELED"),
     [orders]
   );
 
-  // 주문 진행 및 결제 / 수령 통계
+  // 주문 진행 및 결제 통계
   const breakdown = useMemo(() => {
     const total = activeOrders.length;
     const reserved = activeOrders.filter((o) => o.status === "RESERVED").length;
@@ -54,10 +51,8 @@ export function AdminDashboardTab({
     const pickedUp = activeOrders.filter((o) => o.status === "PICKED_UP").length;
     const paid = activeOrders.filter((o) => o.is_paid).length;
     const unpaid = total - paid;
-    const pickup = activeOrders.filter((o) => o.fulfillment_type === "PICKUP").length;
-    const delivery = activeOrders.filter((o) => o.fulfillment_type === "DELIVERY").length;
 
-    return { total, reserved, ready, pickedUp, paid, unpaid, pickup, delivery };
+    return { total, reserved, ready, pickedUp, paid, unpaid };
   }, [activeOrders]);
 
   // 그래프용 데이터 (판매량 또는 매출 내림차순)
@@ -79,11 +74,6 @@ export function AdminDashboardTab({
 
     return { sorted, totalValue, maxValue };
   }, [aggregations, chartMetric]);
-
-  const filteredAggregations = useMemo(() => {
-    if (categoryFilter === "ALL") return aggregations;
-    return aggregations.filter((a) => a.category === categoryFilter);
-  }, [aggregations, categoryFilter]);
 
   return (
     <div className="space-y-4">
@@ -194,14 +184,8 @@ export function AdminDashboardTab({
                       >
                         {idx + 1}
                       </span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
-                          item.category === "DELIVERY"
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-blue-50 text-blue-700"
-                        }`}
-                      >
-                        {item.category === "DELIVERY" ? "배송" : "픽업"}
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 bg-blue-50 text-blue-700">
+                        픽업
                       </span>
                       <span className="font-bold text-slate-800 truncate">
                         {item.product_name}
@@ -307,7 +291,7 @@ export function AdminDashboardTab({
         <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-100 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-extrabold text-slate-800">
-              결제 확인 · 수령 방식 현황
+              결제 확인 현황
             </h3>
             {breakdown.unpaid > 0 && (
               <button
@@ -344,64 +328,29 @@ export function AdminDashboardTab({
                 />
               </div>
             </div>
-
-            <div>
-              <div className="flex justify-between text-[11px] font-bold mb-1">
-                <span className="text-blue-700">
-                  🏬 매장 픽업 ({breakdown.pickup}건)
-                </span>
-                <span className="text-emerald-700">
-                  🚚 배송 ({breakdown.delivery}건)
-                </span>
-              </div>
-              <div className="h-2.5 w-full rounded-full bg-emerald-100 overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{
-                    width: `${
-                      breakdown.total > 0
-                        ? (breakdown.pickup / breakdown.total) * 100
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-            </div>
+            <p className="text-[11px] text-slate-500">
+              전체 유효 주문 {breakdown.total}건 중{" "}
+              <strong className="text-slate-800">
+                {breakdown.total > 0
+                  ? Math.round((breakdown.paid / breakdown.total) * 100)
+                  : 0}
+                %
+              </strong>
+              가 입금 확인되었습니다.
+            </p>
           </div>
         </div>
       </section>
 
       {/* 3. 품목별 소분·발주 요약표 */}
       <section className="bg-white rounded-3xl p-5 shadow-xs border border-slate-100 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-extrabold text-slate-900">
-              📦 품목별 소분·발주 &amp; 재고 현황
-            </h3>
-            <p className="text-[11px] text-slate-500">
-              입고 상태 변경 및 원터치 품절·리필을 바로 제어할 수 있습니다.
-            </p>
-          </div>
-          <div className="inline-flex rounded-xl bg-slate-100 p-1 text-[11px] font-bold">
-            {[
-              { id: "ALL", label: "전체" },
-              { id: "PICKUP", label: "🏬 픽업" },
-              { id: "DELIVERY", label: "🚚 배송" },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setCategoryFilter(tab.id as "ALL" | "PICKUP" | "DELIVERY")}
-                className={`px-2.5 py-1 rounded-lg transition ${
-                  categoryFilter === tab.id
-                    ? "bg-white text-slate-900 shadow-2xs"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+        <div>
+          <h3 className="text-sm font-extrabold text-slate-900">
+            📦 품목별 소분·발주 &amp; 재고 현황
+          </h3>
+          <p className="text-[11px] text-slate-500">
+            입고 상태 변경 및 원터치 품절·리필을 바로 제어할 수 있습니다.
+          </p>
         </div>
 
         <div className="overflow-x-auto">
@@ -416,100 +365,96 @@ export function AdminDashboardTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAggregations.map((agg) => {
-                const isSoldOut = agg.is_limited && agg.remain_stock <= 0;
-                return (
-                  <tr key={agg.product_id} className="hover:bg-slate-50/80">
-                    <td className="py-3 pr-2">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
-                            agg.category === "DELIVERY"
-                              ? "bg-emerald-50 text-emerald-700"
-                              : "bg-blue-50 text-blue-700"
-                          }`}
-                        >
-                          {agg.category === "DELIVERY" ? "배송" : "픽업"}
-                        </span>
+              {aggregations.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-slate-400">
+                    등록된 상품이 없습니다. &apos;상품·재고 관리&apos; 탭에서 과일을 등록해 주세요.
+                  </td>
+                </tr>
+              ) : (
+                aggregations.map((agg) => {
+                  const isSoldOut = agg.is_limited && agg.remain_stock <= 0;
+                  const refillQty = agg.total_stock > 0 ? agg.total_stock : 10;
+                  return (
+                    <tr key={agg.product_id} className="hover:bg-slate-50/80">
+                      <td className="py-3 pr-2">
                         <p className="font-extrabold text-slate-900">
                           {agg.product_name}
                         </p>
-                      </div>
-                      <p className="text-[11px] text-slate-400">
-                        {agg.unit_label} · {formatKRW(agg.price)}
-                      </p>
-                    </td>
-                    <td className="py-3 px-2 text-center">
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 font-black text-xs">
-                        {agg.ordered_quantity}개 ({agg.order_count}건)
-                      </span>
-                    </td>
-                    <td className="py-3 px-2 text-center">
-                      {agg.is_limited ? (
-                        <span
-                          className={`font-extrabold ${
-                            isSoldOut ? "text-rose-600" : "text-slate-700"
-                          }`}
-                        >
-                          {isSoldOut
-                            ? "품절 (0개)"
-                            : `${agg.remain_stock} / ${agg.total_stock}개`}
+                        <p className="text-[11px] text-slate-400">
+                          {agg.unit_label} · {formatKRW(agg.price)}
+                        </p>
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-900 font-black text-xs">
+                          {agg.ordered_quantity}개 ({agg.order_count}건)
                         </span>
-                      ) : (
-                        <span className="text-slate-500 font-semibold">
-                          무제한(∞)
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-2 text-center">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void onPatchProduct(
-                            agg.product_id,
-                            { is_received: !agg.is_received },
-                            `📦 '${agg.product_name}' 입고 상태가 변경되었습니다.`
-                          )
-                        }
-                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
-                          agg.is_received
-                            ? "bg-blue-50 text-blue-700 border border-blue-200"
-                            : "bg-amber-50 text-amber-800 border border-amber-200"
-                        }`}
-                      >
-                        {agg.is_received ? "✅ 입고완료" : "⏳ 입고전"}
-                      </button>
-                    </td>
-                    <td className="py-3 pl-2 text-right">
-                      {agg.is_limited && (
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        {agg.is_limited ? (
+                          <span
+                            className={`font-extrabold ${
+                              isSoldOut ? "text-rose-600" : "text-slate-700"
+                            }`}
+                          >
+                            {isSoldOut
+                              ? "품절 (0개)"
+                              : `${agg.remain_stock} / ${agg.total_stock}개`}
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 font-semibold">
+                            무제한(∞)
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-2 text-center">
                         <button
                           type="button"
                           onClick={() =>
                             void onPatchProduct(
                               agg.product_id,
-                              {
-                                remain_stock: isSoldOut
-                                  ? Math.max(15, agg.total_stock)
-                                  : 0,
-                              },
-                              isSoldOut
-                                ? `🔄 '${agg.product_name}' 재고가 보충되었습니다.`
-                                : `🚫 '${agg.product_name}' 품절 처리되었습니다.`
+                              { is_received: !agg.is_received },
+                              `📦 '${agg.product_name}' 입고 상태가 변경되었습니다.`
                             )
                           }
-                          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] ${
-                            isSoldOut
-                              ? "bg-emerald-600 text-white"
-                              : "bg-rose-50 text-rose-600 hover:bg-rose-100"
+                          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
+                            agg.is_received
+                              ? "bg-blue-50 text-blue-700 border border-blue-200"
+                              : "bg-amber-50 text-amber-800 border border-amber-200"
                           }`}
                         >
-                          {isSoldOut ? "+재고리필" : "원터치 품절"}
+                          {agg.is_received ? "✅ 입고완료" : "⏳ 입고전"}
                         </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="py-3 pl-2 text-right">
+                        {agg.is_limited && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onPatchProduct(
+                                agg.product_id,
+                                {
+                                  remain_stock: isSoldOut ? refillQty : 0,
+                                },
+                                isSoldOut
+                                  ? `🔄 '${agg.product_name}' 재고(${refillQty}개)가 복구되었습니다.`
+                                  : `🚫 '${agg.product_name}' 품절 처리되었습니다.`
+                              )
+                            }
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[11px] ${
+                              isSoldOut
+                                ? "bg-emerald-600 text-white"
+                                : "bg-rose-50 text-rose-600 hover:bg-rose-100"
+                            }`}
+                          >
+                            {isSoldOut ? "+재고리필" : "원터치 품절"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>

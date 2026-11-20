@@ -17,6 +17,7 @@ export default function CustomerOrdersLookupPage() {
   const [searchedPhone, setSearchedPhone] = useState("");
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"ACTIVE" | "ALL">("ACTIVE");
   const [toastText, setToastText] = useState<string | null>(null);
 
@@ -45,6 +46,7 @@ export default function CustomerOrdersLookupPage() {
     }
 
     setLoading(true);
+    setLookupError(null);
     setSearchedNick(trimmedNick);
     setSearchedPhone(trimmedPhone);
 
@@ -59,7 +61,13 @@ export default function CustomerOrdersLookupPage() {
         const data = await res.json();
         setSettings(data.settings);
         setOrders(data.myOrders ?? []);
+      } else {
+        setOrders([]);
+        setLookupError("예약 내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
       }
+    } catch {
+      setOrders([]);
+      setLookupError("네트워크 오류로 예약 내역을 조회하지 못했습니다.");
     } finally {
       setLoading(false);
     }
@@ -244,6 +252,17 @@ export default function CustomerOrdersLookupPage() {
           <div className="bg-white rounded-2xl border border-[#E5E8EB] py-12 text-center text-sm text-[#8B95A1]">
             예약 내역을 조회하는 중입니다...
           </div>
+        ) : lookupError ? (
+          <div className="bg-white rounded-2xl border border-rose-200 py-10 text-center space-y-3 px-4">
+            <div className="text-sm font-semibold text-[#F04452]">{lookupError}</div>
+            <button
+              type="button"
+              onClick={() => void fetchOrders(searchedNick, searchedPhone)}
+              className="inline-block px-4 py-2 rounded-xl bg-[#4F92F8] text-white text-xs font-bold"
+            >
+              다시 조회하기
+            </button>
+          </div>
         ) : !searchedNick ? (
           <div className="bg-white rounded-2xl border border-[#E5E8EB] py-12 text-center space-y-3 px-4">
             <div className="text-sm text-[#8B95A1]">
@@ -281,16 +300,8 @@ export default function CustomerOrdersLookupPage() {
                     <span className="font-bold text-sm text-[#191F28]">
                       {order.kakao_nickname}님
                     </span>
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${
-                        order.fulfillment_type === "DELIVERY"
-                          ? "bg-[#E8F8F0] text-[#03B26C]"
-                          : "bg-[#E8F3FF] text-[#1B64DA]"
-                      }`}
-                    >
-                      {order.fulfillment_type === "DELIVERY"
-                        ? "🚚 배송"
-                        : "🏬 매장 픽업"}
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#E8F3FF] text-[#1B64DA]">
+                      🏬 매장 픽업
                     </span>
                     {order.status === "PICKED_UP" ? (
                       <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[11px] font-bold">
@@ -366,10 +377,7 @@ export default function CustomerOrdersLookupPage() {
 
                 <div className="bg-[#FFF4E5] px-4 py-3 border-t border-[#E5E8EB] flex items-center justify-between flex-wrap gap-2 text-xs">
                   <span className="text-[#8B95A1]">
-                    {order.fulfillment_type === "DELIVERY" &&
-                    order.delivery_address
-                      ? `📍 배송지: ${order.delivery_address}`
-                      : `⏰ ${order.pickup_time || "매장 방문"}`}
+                    ⏰ {order.pickup_time || "매장 방문"}
                   </span>
                   <span className="font-bold text-sm text-[#FF8A00]">
                     합계: {formatKRW(order.total_amount)}

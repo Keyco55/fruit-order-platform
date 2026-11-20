@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import {
   buildProductAggregations,
   enrichAndFilterOrders,
+  getKstDateString,
   normalizePhoneDigits,
 } from "@/lib/store-helpers";
 import type {
@@ -21,12 +22,14 @@ interface StoreDatabase {
   settings: StoreSettings;
   products: Product[];
   orders: Order[];
+  orderIdempotencyMap?: Record<string, string>;
+  productIdempotencyMap?: Record<string, string>;
 }
 
 const TMP_STORE_PATH = path.join("/tmp", "fruit-order-platform-store-v3.json");
 
 function getTodayDateStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return getKstDateString();
 }
 
 export function createInitialSeedData(): StoreDatabase {
@@ -460,6 +463,17 @@ export function getProductAggregations(): ProductAggregation[] {
 
 export function createOrder(input: CreateOrderInput): Order {
   const db = loadDb();
+  const idemKey = input.idempotency_key?.trim();
+  if (idemKey) {
+    const existingOrderId = db.orderIdempotencyMap?.[idemKey];
+    if (existingOrderId) {
+      const existing = db.orders.find((o) => o.id === existingOrderId);
+      if (existing) {
+        return existing;
+      }
+    }
+  }
+
   const nickname = input.kakao_nickname.trim();
 
   if (!nickname) {
@@ -470,21 +484,29 @@ export function createOrder(input: CreateOrderInput): Order {
     throw new Error("주문할 과일을 1개 이상 선택해 주세요.");
   }
 
-  // 1. 재고 및 상품 유효성 사전 검증 (원자적 처리)
-  const validatedItems: Array<{ product: Product; quantity: number }> = [];
-
+  // 1. 재고 및 상품 유효성 사전 검증 (동일 상품 합산 후 검증)
+  const qtyByProduct = new Map<string, number>();
   for (const reqItem of input.items) {
-    if (reqItem.quantity <= 0) continue;
-    const product = db.products.find((p) => p.id === reqItem.product_id);
+    const qty = Math.floor(Number(reqItem.quantity));
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    qtyByProduct.set(
+      reqItem.product_id,
+      (qtyByProduct.get(reqItem.product_id) ?? 0) + qty
+    );
+  }
+
+  const validatedItems: Array<{ product: Product; quantity: number }> = [];
+  for (const [productId, quantity] of qtyByProduct.entries()) {
+    const product = db.products.find((p) => p.id === productId);
     if (!product || !product.is_visible) {
       throw new Error("존재하지 않거나 판매 종료된 과일이 포함되어 있습니다.");
     }
-    if (product.is_limited && product.remain_stock < reqItem.quantity) {
+    if (product.is_limited && product.remain_stock < quantity) {
       throw new Error(
         `'${product.name}' 상품의 남은 수량(${product.remain_stock}개)이 부족합니다.`
       );
     }
-    validatedItems.push({ product, quantity: reqItem.quantity });
+    validatedItems.push({ product, quantity });
   }
 
   if (validatedItems.length === 0) {
@@ -549,6 +571,10 @@ export function createOrder(input: CreateOrderInput): Order {
   };
 
   db.orders.unshift(newOrder);
+  if (idemKey) {
+    db.orderIdempotencyMap = db.orderIdempotencyMap ?? {};
+    db.orderIdempotencyMap[idemKey] = newOrder.id;
+  }
   saveDb(db);
   return newOrder;
 }
@@ -584,9 +610,11 @@ export function updateOrderAdmin(
     }
   }
 
-  // 취소 상태에서 다시 활성 상태로 복구 시 재고 재차감
+  // 취소 상태에서 다시 활성 상태로 복구 시 재고 재차감 (전체 검증 후 일괄 반영)
   if (prevStatus === "CANCELED" && nextStatus !== "CANCELED") {
+    const restoreTargets: Array<{ product: Product; quantity: number }> = [];
     for (const item of order.items) {
+      if (!item.product_id) continue;
       const product = db.products.find((p) => p.id === item.product_id);
       if (product && product.is_limited) {
         if (product.remain_stock < item.quantity) {
@@ -594,8 +622,11 @@ export function updateOrderAdmin(
             `'${product.name}' 재고가 부족하여 주문을 복구할 수 없습니다.`
           );
         }
-        product.remain_stock -= item.quantity;
+        restoreTargets.push({ product, quantity: item.quantity });
       }
+    }
+    for (const { product, quantity } of restoreTargets) {
+      product.remain_stock -= quantity;
     }
   }
 
@@ -610,14 +641,30 @@ export function updateOrderAdmin(
 
 export function createProductAdmin(input: CreateProductInput): Product {
   const db = loadDb();
+  const idemKey = input.idempotency_key?.trim();
+  if (idemKey) {
+    const existingProductId = db.productIdempotencyMap?.[idemKey];
+    if (existingProductId) {
+      const existing = db.products.find((p) => p.id === existingProductId);
+      if (existing) {
+        return existing;
+      }
+    }
+  }
+
   const maxSort = db.products.reduce(
     (max, p) => (p.sort_order > max ? p.sort_order : max),
     0
   );
 
-  const totalStock = input.is_limited ? Math.max(0, input.total_stock) : 999;
+  const totalStock = input.is_limited
+    ? Math.max(0, Math.floor(Number(input.total_stock ?? 0)))
+    : 999;
   const remainStock = input.is_limited
-    ? Math.max(0, input.remain_stock ?? totalStock)
+    ? Math.min(
+        totalStock,
+        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock)))
+      )
     : 999;
 
   const newProduct: Product = {
@@ -626,9 +673,9 @@ export function createProductAdmin(input: CreateProductInput): Product {
     category: input.category,
     name: input.name.trim(),
     unit_label: input.unit_label.trim() || "1팩",
-    price: Math.max(0, Number(input.price) || 0),
+    price: Math.max(0, Math.floor(Number(input.price) || 0)),
     original_price: input.original_price
-      ? Math.max(0, Number(input.original_price))
+      ? Math.max(0, Math.floor(Number(input.original_price)))
       : undefined,
     origin: (input.origin ?? "국산").trim(),
     brix: input.brix?.trim() || undefined,
@@ -650,6 +697,10 @@ export function createProductAdmin(input: CreateProductInput): Product {
   };
 
   db.products.unshift(newProduct);
+  if (idemKey) {
+    db.productIdempotencyMap = db.productIdempotencyMap ?? {};
+    db.productIdempotencyMap[idemKey] = newProduct.id;
+  }
   saveDb(db);
   return newProduct;
 }
@@ -665,6 +716,33 @@ export function updateProductAdmin(
   }
 
   Object.assign(product, patch);
+  if (product.is_limited) {
+    product.total_stock = Math.max(0, Math.floor(Number(product.total_stock) || 0));
+    product.remain_stock = Math.min(
+      product.total_stock,
+      Math.max(0, Math.floor(Number(product.remain_stock) || 0))
+    );
+  }
+  saveDb(db);
+  return product;
+}
+
+export function adjustProductStockAdmin(
+  productId: string,
+  delta: number
+): Product {
+  const db = loadDb();
+  const product = db.products.find((p) => p.id === productId);
+  if (!product) {
+    throw new Error("상품을 찾을 수 없습니다.");
+  }
+  if (!product.is_limited) {
+    return product;
+  }
+
+  const nextRemain = Math.max(0, product.remain_stock + Math.trunc(delta));
+  product.remain_stock = nextRemain;
+  product.total_stock = Math.max(product.total_stock, nextRemain);
   saveDb(db);
   return product;
 }
@@ -672,5 +750,12 @@ export function updateProductAdmin(
 export function deleteProductAdmin(productId: string): void {
   const db = loadDb();
   db.products = db.products.filter((p) => p.id !== productId);
+  for (const order of db.orders) {
+    for (const item of order.items) {
+      if (item.product_id === productId) {
+        item.product_id = null;
+      }
+    }
+  }
   saveDb(db);
 }

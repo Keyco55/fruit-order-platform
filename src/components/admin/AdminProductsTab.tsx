@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { formatKRW, matchesKoreanSearch } from "@/lib/formatters";
 import { compressImageToWebpDataUrl } from "@/lib/image-compressor";
-import type { CreateProductInput, Product, ProductCategory } from "@/types/domain";
+import type { CreateProductInput, Product } from "@/types/domain";
 
 const QUICK_FRUIT_PRESETS = [
   {
@@ -79,6 +79,7 @@ interface AdminProductsTabProps {
     patch: Partial<Product>,
     successMsg: string
   ) => Promise<void>;
+  onAdjustStock: (productId: string, delta: number) => Promise<void>;
   onDeleteProduct: (productId: string, name: string) => Promise<void>;
   showToast: (msg: string) => void;
 }
@@ -90,14 +91,17 @@ export function AdminProductsTab({
   onRefresh,
   onCreateProduct,
   onPatchProduct,
+  onAdjustStock,
   onDeleteProduct,
   showToast,
 }: AdminProductsTabProps) {
   const [subView, setSubView] = useState<"LIST" | "CREATE">("LIST");
   const [productSearch, setProductSearch] = useState("");
   const [productFilter, setProductFilter] = useState<
-    "ALL" | "PICKUP" | "DELIVERY" | "SOLDOUT" | "HIDDEN"
+    "ALL" | "SOLDOUT" | "HIDDEN"
   >("ALL");
+  const [isCreating, setIsCreating] = useState(false);
+  const [busyProductId, setBusyProductId] = useState<string | null>(null);
 
   // 빠른 수정 상태
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -118,7 +122,6 @@ export function AdminProductsTab({
   });
 
   // 새 과일 30초 등록 폼 상태
-  const [prodCategory, setProdCategory] = useState<ProductCategory>("PICKUP");
   const [prodName, setProdName] = useState("");
   const [prodUnit, setProdUnit] = useState("500g 1팩");
   const [prodPrice, setProdPrice] = useState("12900");
@@ -137,8 +140,6 @@ export function AdminProductsTab({
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      if (productFilter === "PICKUP" && p.category !== "PICKUP") return false;
-      if (productFilter === "DELIVERY" && p.category !== "DELIVERY") return false;
       if (productFilter === "SOLDOUT" && !(p.is_limited && p.remain_stock <= 0))
         return false;
       if (productFilter === "HIDDEN" && p.is_visible) return false;
@@ -167,13 +168,13 @@ export function AdminProductsTab({
   };
 
   const handleAdjustStock = async (product: Product, delta: number) => {
-    const nextRemain = Math.max(0, product.remain_stock + delta);
-    const nextTotal = Math.max(product.total_stock, nextRemain);
-    await onPatchProduct(
-      product.id,
-      { remain_stock: nextRemain, total_stock: nextTotal },
-      `📦 '${product.name}' 남은 재고가 ${nextRemain}개로 조정되었습니다.`
-    );
+    if (busyProductId === product.id) return;
+    setBusyProductId(product.id);
+    try {
+      await onAdjustStock(product.id, delta);
+    } finally {
+      setBusyProductId(null);
+    }
   };
 
   const startInlineEdit = (product: Product) => {
@@ -214,36 +215,56 @@ export function AdminProductsTab({
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreating) return;
     if (!prodName.trim()) {
       showToast("과일명을 입력해 주세요.");
       return;
     }
 
-    const totalStockNum = Math.max(0, Number(prodStock) || 30);
-    const ok = await onCreateProduct({
-      category: prodCategory,
-      name: prodName.trim(),
-      unit_label: prodUnit.trim() || "1팩",
-      price: Math.max(0, Number(prodPrice) || 0),
-      original_price: prodOriginalPrice ? Number(prodOriginalPrice) : undefined,
-      origin: prodOrigin.trim() || "국산",
-      brix: prodBrix.trim() || undefined,
-      badge_text: prodBadge.trim() || undefined,
-      description:
-        prodDesc.trim() ||
-        "오늘 새벽 가락시장에서 직접 선별한 고당도 신선 과일입니다.",
-      images: [prodImage],
-      is_limited: prodIsLimited,
-      total_stock: totalStockNum,
-      remain_stock: totalStockNum,
-      is_received: prodIsReceived,
-      is_visible: true,
-    });
+    const parsedStock =
+      prodStock.trim() === "" ? 0 : Math.max(0, Math.floor(Number(prodStock)));
+    if (!Number.isFinite(parsedStock)) {
+      showToast("재고 수량을 숫자로 정확히 입력해 주세요.");
+      return;
+    }
 
-    if (ok) {
-      setProdName("");
-      setProdDesc("");
-      setSubView("LIST");
+    const requestId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `prod-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+    setIsCreating(true);
+    try {
+      const ok = await onCreateProduct({
+        category: "PICKUP",
+        name: prodName.trim(),
+        unit_label: prodUnit.trim() || "1팩",
+        price: Math.max(0, Math.floor(Number(prodPrice) || 0)),
+        original_price: prodOriginalPrice
+          ? Math.max(0, Math.floor(Number(prodOriginalPrice)))
+          : undefined,
+        origin: prodOrigin.trim() || "국산",
+        brix: prodBrix.trim() || undefined,
+        badge_text: prodBadge.trim() || undefined,
+        description:
+          prodDesc.trim() ||
+          "오늘 새벽 가락시장에서 직접 선별한 고당도 신선 과일입니다.",
+        images: [prodImage],
+        is_limited: prodIsLimited,
+        total_stock: parsedStock,
+        remain_stock: parsedStock,
+        is_received: prodIsReceived,
+        is_visible: true,
+        idempotency_key: requestId,
+      });
+
+      if (ok) {
+        setProdName("");
+        setProdDesc("");
+        setSubView("LIST");
+      }
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -324,8 +345,6 @@ export function AdminProductsTab({
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {[
                 { id: "ALL", label: "전체" },
-                { id: "PICKUP", label: "🏬 픽업" },
-                { id: "DELIVERY", label: "🚚 배송" },
                 { id: "SOLDOUT", label: "품절만" },
                 { id: "HIDDEN", label: "숨김만" },
               ].map((tab) => (
@@ -334,7 +353,7 @@ export function AdminProductsTab({
                   type="button"
                   onClick={() =>
                     setProductFilter(
-                      tab.id as "ALL" | "PICKUP" | "DELIVERY" | "SOLDOUT" | "HIDDEN"
+                      tab.id as "ALL" | "SOLDOUT" | "HIDDEN"
                     )
                   }
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
@@ -382,14 +401,8 @@ export function AdminProductsTab({
                         />
                         <div className="min-w-0 space-y-0.5">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
-                                p.category === "DELIVERY"
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : "bg-blue-50 text-blue-700"
-                              }`}
-                            >
-                              {p.category === "DELIVERY" ? "배송" : "픽업"}
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 bg-blue-50 text-blue-700">
+                              픽업
                             </span>
                             <span className="text-sm font-extrabold text-slate-900 truncate">
                               {p.name}
@@ -603,7 +616,7 @@ export function AdminProductsTab({
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, -5)}
-                              disabled={p.remain_stock <= 0}
+                              disabled={p.remain_stock <= 0 || busyProductId === p.id}
                               className="px-2 py-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-700"
                             >
                               -5
@@ -611,7 +624,7 @@ export function AdminProductsTab({
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, -1)}
-                              disabled={p.remain_stock <= 0}
+                              disabled={p.remain_stock <= 0 || busyProductId === p.id}
                               aria-label="재고 1 감소"
                               className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-700"
                             >
@@ -620,15 +633,17 @@ export function AdminProductsTab({
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, 1)}
+                              disabled={busyProductId === p.id}
                               aria-label="재고 1 증가"
-                              className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700"
+                              className="p-1.5 rounded-lg hover:bg-emerald-50 disabled:opacity-30 text-emerald-700"
                             >
                               <Plus className="w-3 h-3" />
                             </button>
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, 5)}
-                              className="px-2 py-1 rounded-lg hover:bg-emerald-50 text-emerald-700"
+                              disabled={busyProductId === p.id}
+                              className="px-2 py-1 rounded-lg hover:bg-emerald-50 disabled:opacity-30 text-emerald-700"
                             >
                               +5
                             </button>
@@ -656,19 +671,19 @@ export function AdminProductsTab({
                         {p.is_limited && (
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              const refillQty =
+                                p.total_stock > 0 ? p.total_stock : 10;
                               void onPatchProduct(
                                 p.id,
                                 {
-                                  remain_stock: isSoldOut
-                                    ? Math.max(15, p.total_stock)
-                                    : 0,
+                                  remain_stock: isSoldOut ? refillQty : 0,
                                 },
                                 isSoldOut
-                                  ? "재고가 리필되었습니다."
+                                  ? `재고(${refillQty}개)가 복구되었습니다.`
                                   : "품절 처리되었습니다."
-                              )
-                            }
+                              );
+                            }}
                             className={`px-2.5 py-1.5 rounded-xl text-xs font-bold ${
                               isSoldOut
                                 ? "bg-emerald-600 text-white"
@@ -732,35 +747,18 @@ export function AdminProductsTab({
           </div>
 
           <form onSubmit={handleCreateSubmit} className="space-y-3 pt-2">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">
-                  판매 탭 구분
-                </label>
-                <select
-                  value={prodCategory}
-                  onChange={(e) =>
-                    setProdCategory(e.target.value as ProductCategory)
-                  }
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-100 text-xs font-bold"
-                >
-                  <option value="PICKUP">🏬 매장 픽업 (PICKUP)</option>
-                  <option value="DELIVERY">🚚 배송 상품 (DELIVERY)</option>
-                </select>
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-bold text-slate-600 mb-1">
-                  과일 상품명 *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={prodName}
-                  onChange={(e) => setProdName(e.target.value)}
-                  placeholder="예: 논산 설향 딸기 (특품)"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-xs font-bold"
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">
+                과일 상품명 * (매장 픽업 전용)
+              </label>
+              <input
+                type="text"
+                required
+                value={prodName}
+                onChange={(e) => setProdName(e.target.value)}
+                placeholder="예: 논산 설향 딸기 (특품)"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-xs font-bold"
+              />
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
@@ -889,9 +887,12 @@ export function AdminProductsTab({
 
             <button
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-sm transition"
+              disabled={isCreating}
+              className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold text-sm shadow-sm transition"
             >
-              + 오늘의 판매 과일로 즉시 등록하기
+              {isCreating
+                ? "상품 등록 중..."
+                : "+ 오늘의 판매 과일로 즉시 등록하기"}
             </button>
           </form>
         </section>

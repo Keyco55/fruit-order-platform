@@ -4,9 +4,15 @@ import {
   buildProductAggregations,
   enrichAndFilterOrders,
   normalizePhoneDigits,
+  sanitizeOrdersForPublic,
 } from "../src/lib/store-helpers";
 import {
+  adjustProductStockAdmin,
+  createOrder,
+  createProductAdmin,
+  deleteProductAdmin,
   getDataSourceMode,
+  getOrders,
   getProducts,
   getStoreSettings,
   resetDemoDatabase,
@@ -197,5 +203,112 @@ describe("리포지토리 및 공통 스토어 헬퍼 검증", () => {
     assert.equal(aggs[0].ordered_amount, 20000);
     assert.equal(aggs[0].picked_up_quantity, 2);
     assert.equal(aggs[0].order_count, 1);
+  });
+
+  it("부분 닉네임·4자리 미만 전화번호 조회는 차단되고 공개 응답에서 전화번호 원문은 제거되어야 한다", () => {
+    const orders: Order[] = [
+      {
+        id: "o1",
+        order_date: "2026-11-20",
+        kakao_nickname: "단골맘",
+        customer_phone: "010-1234-5678",
+        customer_phone_last4: "5678",
+        fulfillment_type: "PICKUP",
+        delivery_address: "비공개주소",
+        total_amount: 10000,
+        status: "RESERVED",
+        is_paid: false,
+        source: "WEB",
+        pickup_time: "오늘",
+        memo: "",
+        created_at: "2026-11-20T01:00:00.000Z",
+        items: [],
+      },
+    ];
+
+    assert.equal(
+      enrichAndFilterOrders(orders, [], { nickname: "단골", phone: "5678" }).length,
+      0
+    );
+    assert.equal(
+      enrichAndFilterOrders(orders, [], { nickname: "단골맘", phone: "78" }).length,
+      0
+    );
+    assert.equal(
+      enrichAndFilterOrders(orders, [], { nickname: "", phone: "5678" }).length,
+      0
+    );
+
+    const exact = enrichAndFilterOrders(orders, [], {
+      nickname: "단골맘",
+      phone: "5678",
+    });
+    assert.equal(exact.length, 1);
+
+    const sanitized = sanitizeOrdersForPublic(exact);
+    assert.equal(sanitized[0].customer_phone, undefined);
+    assert.equal(sanitized[0].delivery_address, undefined);
+    assert.equal(sanitized[0].customer_phone_last4, "5678");
+  });
+
+  it("동일 idempotency_key로 중복 상품 등록·주문을 요청해도 1건만 생성되어야 한다", async () => {
+    await resetDemoDatabase();
+
+    const p1 = await createProductAdmin({
+      category: "PICKUP",
+      name: "테스트 무화과",
+      unit_label: "1팩",
+      price: 9000,
+      is_limited: true,
+      total_stock: 0,
+      idempotency_key: "prod-idem-1",
+    });
+    assert.equal(p1.total_stock, 0);
+    assert.equal(p1.remain_stock, 0);
+
+    const p2 = await createProductAdmin({
+      category: "PICKUP",
+      name: "테스트 무화과",
+      unit_label: "1팩",
+      price: 9000,
+      is_limited: true,
+      total_stock: 0,
+      idempotency_key: "prod-idem-1",
+    });
+    assert.equal(p1.id, p2.id);
+
+    const adjusted = await adjustProductStockAdmin(p1.id, 5);
+    assert.equal(adjusted.remain_stock, 5);
+    assert.equal(adjusted.total_stock, 5);
+
+    const o1 = await createOrder({
+      kakao_nickname: "중복방지고객",
+      customer_phone: "010-5555-6666",
+      idempotency_key: "order-idem-1",
+      items: [{ product_id: p1.id, quantity: 2 }],
+    });
+    const o2 = await createOrder({
+      kakao_nickname: "중복방지고객",
+      customer_phone: "010-5555-6666",
+      idempotency_key: "order-idem-1",
+      items: [{ product_id: p1.id, quantity: 2 }],
+    });
+    assert.equal(o1.id, o2.id);
+
+    const afterProducts = await getProducts({ includeHidden: true });
+    const target = afterProducts.find((p) => p.id === p1.id)!;
+    assert.equal(target.remain_stock, 3);
+
+    // 주문이 연결된 상품도 삭제 가능하며 주문 기록은 보존되어야 함
+    await deleteProductAdmin(p1.id);
+    const afterDeleteProducts = await getProducts({ includeHidden: true });
+    assert.equal(afterDeleteProducts.some((p) => p.id === p1.id), false);
+
+    const preservedOrders = await getOrders({
+      nickname: "중복방지고객",
+      phone: "6666",
+    });
+    assert.equal(preservedOrders.length, 1);
+    assert.equal(preservedOrders[0].items[0].product_id, null);
   });
 });

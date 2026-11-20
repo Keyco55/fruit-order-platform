@@ -8,9 +8,18 @@ export function normalizePhoneDigits(value?: string): string {
   return (value ?? "").replace(/\D/g, "");
 }
 
+export function getKstDateString(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
 /**
  * 주문 품목에 상품의 현재 매장 입고 여부(is_received)를 매핑하고,
- * 닉네임 / 연락처 / 취소 포함 여부 조건으로 필터링 및 최신순 정렬합니다.
+ * 닉네임(정규화 정확 일치) / 연락처(4자리 이상) / 취소 포함 여부 조건으로 필터링 및 최신순 정렬합니다.
  */
 export function enrichAndFilterOrders(
   rawOrders: Order[],
@@ -30,19 +39,29 @@ export function enrichAndFilterOrders(
     ...order,
     items: order.items.map((item) => ({
       ...item,
-      is_received: productReceivedMap.get(item.product_id) ?? true,
+      is_received: item.product_id
+        ? productReceivedMap.get(item.product_id) ?? true
+        : true,
     })),
   }));
 
-  if (options?.nickname && options.nickname.trim()) {
+  if (options?.nickname !== undefined) {
     const targetNick = options.nickname.trim().toLowerCase().replace(/\s+/g, "");
-    orders = orders.filter((o) =>
-      o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "").includes(targetNick)
+    if (!targetNick) {
+      return [];
+    }
+    orders = orders.filter(
+      (o) =>
+        o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "") === targetNick
     );
   }
 
-  const queryPhoneDigits = normalizePhoneDigits(options?.phone ?? options?.phoneLast4);
-  if (queryPhoneDigits) {
+  const rawPhoneFilter = options?.phone ?? options?.phoneLast4;
+  if (rawPhoneFilter !== undefined) {
+    const queryPhoneDigits = normalizePhoneDigits(rawPhoneFilter);
+    if (queryPhoneDigits.length < 4) {
+      return [];
+    }
     orders = orders.filter((o) => {
       const storedDigits = normalizePhoneDigits(o.customer_phone);
       const last4Digits = normalizePhoneDigits(o.customer_phone_last4);
@@ -69,6 +88,17 @@ export function enrichAndFilterOrders(
   return orders.sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
+}
+
+/**
+ * 공개 고객 조회 응답에서 전체 연락처/배송지 등 불필요한 개인정보를 제거합니다.
+ */
+export function sanitizeOrdersForPublic(orders: Order[]): Order[] {
+  return orders.map((order) => ({
+    ...order,
+    customer_phone: undefined,
+    delivery_address: undefined,
+  }));
 }
 
 /**

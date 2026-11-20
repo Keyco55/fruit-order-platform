@@ -55,9 +55,6 @@ export function AdminOrdersTab({
   botReply,
   onSimulateKakaoBot,
 }: AdminOrdersTabProps) {
-  const [fulfillmentFilter, setFulfillmentFilter] = useState<
-    "ALL" | "PICKUP" | "DELIVERY"
-  >("ALL");
   const [showBotTester, setShowBotTester] = useState(false);
 
   const filterCounts = useMemo(() => {
@@ -74,13 +71,6 @@ export function AdminOrdersTab({
 
   const filteredOrders = useMemo(() => {
     return orders.filter((o) => {
-      if (fulfillmentFilter !== "ALL" && o.fulfillment_type !== fulfillmentFilter) {
-        return false;
-      }
-
-      if (orderFilter === "PICKUP" && o.fulfillment_type !== "PICKUP") return false;
-      if (orderFilter === "DELIVERY" && o.fulfillment_type !== "DELIVERY")
-        return false;
       if (orderFilter === "WAITING" && o.status !== "RESERVED") return false;
       if (orderFilter === "READY" && o.status !== "READY") return false;
       if (orderFilter === "PICKED_UP" && o.status !== "PICKED_UP") return false;
@@ -105,7 +95,7 @@ export function AdminOrdersTab({
 
       return true;
     });
-  }, [orders, fulfillmentFilter, orderFilter, orderSearch]);
+  }, [orders, orderFilter, orderSearch]);
 
   const formatOrderTime = (iso: string) => {
     try {
@@ -152,52 +142,27 @@ export function AdminOrdersTab({
         </div>
       </div>
 
-      {/* 검색 + 수령방식 + 상태 필터 */}
+      {/* 검색 + 상태 필터 */}
       <section className="bg-white rounded-3xl p-4 shadow-xs border border-slate-100 space-y-3">
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={orderSearch}
-              onChange={(e) => setOrderSearch(e.target.value)}
-              placeholder="닉네임/초성/전화뒷자리/과일명 검색 (예: ㄱㅇㅅㄹ, 1234)"
-              className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            {orderSearch && (
-              <button
-                type="button"
-                onClick={() => setOrderSearch("")}
-                aria-label="검색어 지우기"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          <div className="inline-flex rounded-xl bg-slate-100 p-1 text-xs font-bold shrink-0">
-            {[
-              { id: "ALL", label: "전체" },
-              { id: "PICKUP", label: "🏬 픽업" },
-              { id: "DELIVERY", label: "🚚 배송" },
-            ].map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() =>
-                  setFulfillmentFilter(item.id as "ALL" | "PICKUP" | "DELIVERY")
-                }
-                className={`px-3 py-1.5 rounded-lg transition ${
-                  fulfillmentFilter === item.id
-                    ? "bg-white text-slate-900 shadow-2xs"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={orderSearch}
+            onChange={(e) => setOrderSearch(e.target.value)}
+            placeholder="닉네임/초성/전화뒷자리/과일명 검색 (예: ㄱㅇㅅㄹ, 1234)"
+            className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          {orderSearch && (
+            <button
+              type="button"
+              onClick={() => setOrderSearch("")}
+              aria-label="검색어 지우기"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {/* 상태별 건수 칩 */}
@@ -274,14 +239,8 @@ export function AdminOrdersTab({
                     </div>
 
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span
-                        className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
-                          order.fulfillment_type === "DELIVERY"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-blue-100 text-blue-800"
-                        }`}
-                      >
-                        {order.fulfillment_type === "DELIVERY" ? "🚚 배송" : "🏬 픽업"}
+                      <span className="px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-100 text-blue-800">
+                        🏬 매장 픽업
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
@@ -343,10 +302,7 @@ export function AdminOrdersTab({
                   ))}
                   <div className="pt-1.5 mt-1 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
                     <span>
-                      {order.fulfillment_type === "DELIVERY" &&
-                      order.delivery_address
-                        ? `📍 배송지: ${order.delivery_address}`
-                        : `⏰ 픽업예정: ${order.pickup_time || "미지정"}`}
+                      ⏰ 픽업예정: {order.pickup_time || "미지정"}
                     </span>
                     {order.memo && (
                       <span className="text-amber-800 font-semibold">
