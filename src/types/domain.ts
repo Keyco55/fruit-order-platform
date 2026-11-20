@@ -46,7 +46,7 @@ export interface Product {
 export interface OrderItem {
   id: string;
   order_id: string;
-  product_id: string;
+  product_id: string | null;
   product_name: string;
   unit_label: string;
   unit_price: number;
@@ -99,6 +99,7 @@ export interface CreateOrderInput {
   pickup_time?: string;
   memo?: string;
   source?: OrderSource;
+  idempotency_key?: string;
   items: Array<{
     product_id: string;
     quantity: number;
@@ -122,4 +123,5 @@ export interface CreateProductInput {
   remain_stock?: number;
   is_received?: boolean;
   is_visible?: boolean;
+  idempotency_key?: string;
 }

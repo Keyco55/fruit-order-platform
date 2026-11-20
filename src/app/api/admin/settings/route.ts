@@ -12,6 +12,7 @@ import {
   resetDemoDatabase,
   updateStoreSettings,
 } from "@/lib/repository";
+import { isSupabaseConfigured } from "@/lib/supabase-admin";
 import type { StoreSettings } from "@/types/domain";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === "reset_demo") {
+      if (isSupabaseConfigured()) {
+        return NextResponse.json(
+          { error: "실운영 DB 모드에서는 전체 초기화를 실행할 수 없습니다." },
+          { status: 403 }
+        );
+      }
+
       const db = await resetDemoDatabase();
       const [products, orders, aggregations] = await Promise.all([
         getProducts({ includeHidden: true }),

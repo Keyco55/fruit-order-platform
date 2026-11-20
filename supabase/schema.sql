@@ -35,11 +35,12 @@ create table if not exists public.products (
   description text not null default '',
   images text[] not null default '{}',
   is_limited boolean not null default true,
-  total_stock integer not null default 30,
-  remain_stock integer not null default 30,
+  total_stock integer not null default 30 check (total_stock >= 0),
+  remain_stock integer not null default 30 check (remain_stock >= 0 and remain_stock <= total_stock),
   is_received boolean not null default false,
   is_visible boolean not null default true,
   sort_order integer not null default 0,
+  idempotency_key text unique,
   created_at timestamptz not null default now()
 );
 
@@ -58,6 +59,7 @@ create table if not exists public.orders (
   source text not null default 'WEB' check (source in ('WEB', 'KAKAO_BOT')),
   pickup_time text not null default '오늘 오후 방문',
   memo text not null default '',
+  idempotency_key text unique,
   created_at timestamptz not null default now()
 );
 
@@ -65,7 +67,7 @@ create table if not exists public.orders (
 create table if not exists public.order_items (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders(id) on delete cascade,
-  product_id uuid not null references public.products(id) on delete restrict,
+  product_id uuid references public.products(id) on delete set null,
   product_name text not null,
   unit_label text not null,
   unit_price integer not null,
@@ -90,8 +92,10 @@ alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 
 -- ============================================================================
--- 원자적 주문 생성 RPC (재고 동시성 제어 및 트랜잭션 보장)
+-- 원자적 주문 생성 RPC (재고 동시성 제어, 중복 접수 방지 및 트랜잭션 보장)
 -- ============================================================================
+drop function if exists public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb);
+
 create or replace function public.create_fruit_order(
   p_kakao_nickname text,
   p_customer_phone text default '',
@@ -101,7 +105,8 @@ create or replace function public.create_fruit_order(
   p_pickup_time text default null,
   p_memo text default '',
   p_source text default 'WEB',
-  p_items jsonb default '[]'::jsonb
+  p_items jsonb default '[]'::jsonb,
+  p_idempotency_key text default null
 )
 returns uuid
 language plpgsql
@@ -110,6 +115,8 @@ set search_path = public
 as $$
 declare
   v_nickname text := trim(coalesce(p_kakao_nickname, ''));
+  v_idem text := nullif(trim(coalesce(p_idempotency_key, '')), '');
+  v_existing_id uuid;
   v_order_id uuid;
   v_total_amount integer := 0;
   v_all_delivery boolean := true;
@@ -124,6 +131,16 @@ declare
   v_product public.products%rowtype;
   v_subtotal integer;
 begin
+  if v_idem is not null then
+    select id into v_existing_id
+    from public.orders
+    where idempotency_key = v_idem
+    limit 1;
+    if found then
+      return v_existing_id;
+    end if;
+  end if;
+
   if v_nickname = '' then
     raise exception '오픈카톡 닉네임을 입력해 주세요.';
   end if;
@@ -216,7 +233,8 @@ begin
     is_paid,
     source,
     pickup_time,
-    memo
+    memo,
+    idempotency_key
   )
   values (
     (now() at time zone 'Asia/Seoul')::date,
@@ -230,7 +248,8 @@ begin
     false,
     v_source,
     v_pickup_time,
-    trim(coalesce(p_memo, ''))
+    trim(coalesce(p_memo, '')),
+    v_idem
   )
   returning id into v_order_id;
 
@@ -314,7 +333,7 @@ begin
     for v_item in
       select product_id, sum(quantity)::integer as quantity
       from public.order_items
-      where order_id = p_order_id
+      where order_id = p_order_id and product_id is not null
       group by product_id
       order by product_id
     loop
@@ -332,7 +351,7 @@ begin
     for v_item in
       select product_id, sum(quantity)::integer as quantity
       from public.order_items
-      where order_id = p_order_id
+      where order_id = p_order_id and product_id is not null
       group by product_id
       order by product_id
     loop
@@ -360,8 +379,56 @@ begin
 end;
 $$;
 
-revoke all on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb) from public, anon, authenticated;
-grant execute on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb) to service_role;
+-- ============================================================================
+-- 원자적 관리자 재고 증감 RPC (동시 주문 차감 덮어쓰기 방지)
+-- ============================================================================
+create or replace function public.adjust_fruit_product_stock(
+  p_product_id uuid,
+  p_delta integer
+)
+returns public.products
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_product public.products%rowtype;
+  v_next_remain integer;
+  v_next_total integer;
+begin
+  select *
+  into v_product
+  from public.products
+  where id = p_product_id
+  for update;
+
+  if not found then
+    raise exception '상품을 찾을 수 없습니다.';
+  end if;
+
+  if not v_product.is_limited then
+    return v_product;
+  end if;
+
+  v_next_remain := greatest(0, v_product.remain_stock + coalesce(p_delta, 0));
+  v_next_total := greatest(v_product.total_stock, v_next_remain);
+
+  update public.products
+  set
+    remain_stock = v_next_remain,
+    total_stock = v_next_total
+  where id = p_product_id
+  returning * into v_product;
+
+  return v_product;
+end;
+$$;
+
+revoke all on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text) from public, anon, authenticated;
+grant execute on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text) to service_role;
 
 revoke all on function public.update_fruit_order_admin(uuid, text, boolean, text, text) from public, anon, authenticated;
 grant execute on function public.update_fruit_order_admin(uuid, text, boolean, text, text) to service_role;
+
+revoke all on function public.adjust_fruit_product_stock(uuid, integer) from public, anon, authenticated;
+grant execute on function public.adjust_fruit_product_stock(uuid, integer) to service_role;

@@ -5,10 +5,8 @@ import Link from "next/link";
 import { copyTextSafe } from "@/lib/clipboard";
 import { formatKRW, matchesKoreanSearch } from "@/lib/formatters";
 import type {
-  FulfillmentType,
   Order,
   Product,
-  ProductCategory,
   StoreSettings,
 } from "@/types/domain";
 
@@ -17,8 +15,13 @@ interface CartItem {
   name: string;
   unit_label: string;
   price: number;
-  category: ProductCategory;
   qty: number;
+}
+
+interface OrderSuccessReceipt {
+  order: Order;
+  clipboardText: string;
+  copied: boolean;
 }
 
 const NICK_STORAGE_KEY = "customer_nickname_yucheon";
@@ -37,24 +40,24 @@ export default function CustomerStorePage() {
   const [searchedNick, setSearchedNick] = useState<string | null>(null);
   const [searchedPhone, setSearchedPhone] = useState<string>("");
   const [isSearching, setIsSearching] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
   const [resTab, setResTab] = useState<"TODAY" | "ALL">("TODAY");
 
-  // 2. 제품 검색 및 픽업 | 배송 카테고리 탭
+  // 2. 제품 검색
   const [productSearch, setProductSearch] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<"ALL" | ProductCategory>("ALL");
 
   // 3. 장바구니 상태 (localStorage 연동)
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [isCartModalOpen, setIsCartModalOpen] = useState(false);
-  const [cartFulfillment, setCartFulfillment] = useState<FulfillmentType>("PICKUP");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
 
-  // 4. 단품 주문 모달 상태
+  // 4. 단품 주문 모달 & 접수 완료 상태
   const [orderModalProduct, setOrderModalProduct] = useState<{
     product: Product;
     qty: number;
-    fulfillment: FulfillmentType;
   } | null>(null);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [orderSuccessReceipt, setOrderSuccessReceipt] =
+    useState<OrderSuccessReceipt | null>(null);
 
   // 5. 제품 상세(프로모션) 모달 상태
   const [promoProduct, setPromoProduct] = useState<Product | null>(null);
@@ -90,12 +93,13 @@ export default function CustomerStorePage() {
     async (targetNick: string, targetPhone?: string) => {
       const trimmedNick = targetNick.trim();
       const trimmedPhone = (targetPhone ?? "").trim();
+      const phoneDigits = trimmedPhone.replace(/\D/g, "");
       if (!trimmedNick) {
         alert("닉네임을 입력해주세요.");
         return;
       }
-      if (!trimmedPhone) {
-        alert("연락처(휴대폰 번호 또는 뒷 4자리)를 입력해주세요.");
+      if (phoneDigits.length < 4) {
+        alert("연락처 뒷 4자리 이상을 입력해주세요.");
         return;
       }
 
@@ -105,6 +109,7 @@ export default function CustomerStorePage() {
       }
 
       setIsSearching(true);
+      setLookupError(null);
       setSearchedNick(trimmedNick);
       setSearchedPhone(trimmedPhone);
 
@@ -118,7 +123,16 @@ export default function CustomerStorePage() {
         if (res.ok) {
           const data = await res.json();
           setAllOrders(data.orders ?? []);
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          setAllOrders([]);
+          setLookupError(
+            errData.error || "예약 내역을 조회하지 못했습니다. 잠시 후 다시 시도해 주세요."
+          );
         }
+      } catch {
+        setAllOrders([]);
+        setLookupError("네트워크 오류로 예약 내역을 조회하지 못했습니다.");
       } finally {
         setIsSearching(false);
       }
@@ -173,10 +187,8 @@ export default function CustomerStorePage() {
     }
   }, []);
 
-  // 장바구니 열기 (담긴 상품 카테고리에 따라 픽업/배송 기본값 자동 설정)
+  // 장바구니 열기
   const openCartModal = () => {
-    const hasDelivery = cartItems.some((c) => c.category === "DELIVERY");
-    setCartFulfillment(hasDelivery ? "DELIVERY" : "PICKUP");
     setIsCartModalOpen(true);
   };
 
@@ -210,7 +222,6 @@ export default function CustomerStorePage() {
           name: product.name,
           unit_label: product.unit_label,
           price: product.price,
-          category: product.category,
           qty: 1,
         },
       ];
@@ -255,31 +266,100 @@ export default function CustomerStorePage() {
     setOrderModalProduct({
       product,
       qty: 1,
-      fulfillment: product.category,
     });
   };
 
-  // 클립보드 주문 텍스트 생성 헬퍼
+  // 클립보드 주문 텍스트 생성 헬퍼 (픽업 전용)
   const buildClipboardText = (
     nickname: string,
-    fulfillment: FulfillmentType,
-    items: Array<{ name: string; qty: number }>,
-    address?: string
+    items: Array<{ name: string; qty: number }>
   ) => {
-    const tag = fulfillment === "DELIVERY" ? "배송" : "픽업";
     const lines = [
-      `[${settings?.store_name || "후르츠파머 유천점"}] 닉네임: ${nickname} (${tag})`,
-      ...items.map((item) => `- ${item.name} ${item.qty}`),
+      `[${settings?.store_name || "후르츠파머 유천점"}] 닉네임: ${nickname} (매장 픽업)`,
+      ...items.map((item) => `- ${item.name} ${item.qty}개`),
     ];
-    if (fulfillment === "DELIVERY" && address?.trim()) {
-      lines.push(`배송지: ${address.trim()}`);
-    }
     return lines.join("\n");
   };
 
-  // 단품 주문 -> 공구방으로 이동
+  const generateRequestId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const submitWebOrder = async (
+    cleanNick: string,
+    cleanPhone: string,
+    orderItems: Array<{ product_id: string; quantity: number }>,
+    displayItems: Array<{ name: string; qty: number }>,
+    clearCartOnSuccess: boolean
+  ): Promise<boolean> => {
+    if (isSubmittingOrder) return false;
+    setIsSubmittingOrder(true);
+
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kakao_nickname: cleanNick,
+          customer_phone: cleanPhone,
+          fulfillment_type: "PICKUP",
+          delivery_address: "",
+          source: "WEB",
+          idempotency_key: generateRequestId(),
+          items: orderItems,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.order) {
+        alert(
+          data.error ||
+            "주문 접수에 실패했습니다. 재고나 입력 정보를 확인한 뒤 다시 시도해 주세요."
+        );
+        return false;
+      }
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem(NICK_STORAGE_KEY, cleanNick);
+        localStorage.setItem(PHONE_STORAGE_KEY, cleanPhone);
+      }
+
+      if (data.products) setProducts(data.products);
+      if (data.myOrders) {
+        setSearchedNick(cleanNick);
+        setSearchedPhone(cleanPhone);
+        setAllOrders(data.myOrders);
+      }
+
+      if (clearCartOnSuccess) {
+        updateCartState([]);
+      }
+
+      const copyText = buildClipboardText(cleanNick, displayItems);
+      const copied = await copyTextSafe(copyText);
+
+      setOrderSuccessReceipt({
+        order: data.order,
+        clipboardText: copyText,
+        copied,
+      });
+
+      if (copied) {
+        showToast("예약이 접수되고 주문서가 복사되었습니다!");
+      }
+      return true;
+    } catch {
+      alert("네트워크 오류로 주문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      return false;
+    } finally {
+      setIsSubmittingOrder(false);
+    }
+  };
+
+  // 단품 주문 접수
   const handleSingleOrderGoToKakao = async () => {
-    if (!orderModalProduct) return;
+    if (!orderModalProduct || isSubmittingOrder) return;
     const cleanNick = nickInput.trim();
     if (!cleanNick) {
       alert("오픈카톡 닉네임을 입력해 주세요!");
@@ -294,69 +374,22 @@ export default function CustomerStorePage() {
       return;
     }
 
-    const { product, qty, fulfillment } = orderModalProduct;
-    if (fulfillment === "DELIVERY" && !deliveryAddress.trim()) {
-      alert("배송 받으실 주소를 입력해 주세요!");
-      return;
-    }
-
-    const copyText = buildClipboardText(
+    const { product, qty } = orderModalProduct;
+    const ok = await submitWebOrder(
       cleanNick,
-      fulfillment,
+      cleanPhone,
+      [{ product_id: product.id, quantity: qty }],
       [{ name: product.name, qty }],
-      deliveryAddress
+      false
     );
-
-    // 1. 클립보드 즉시 복사 (모바일 User Gesture 유지)
-    await copyTextSafe(copyText);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(NICK_STORAGE_KEY, cleanNick);
-      localStorage.setItem(PHONE_STORAGE_KEY, cleanPhone);
+    if (ok) {
+      setOrderModalProduct(null);
     }
-
-    showToast("제품 내역 복사됐어요.\n공구방에 붙여넣기 후 전송하시면 예약됩니다");
-
-    // 2. 오픈카톡방 열기
-    const link = (settings?.kakao_openchat_url || "").trim();
-    if (link) {
-      window.open(link, "_blank");
-    } else {
-      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
-    }
-
-    // 3. 서버 주문 기록 및 화면 재고 갱신
-    try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kakao_nickname: cleanNick,
-          customer_phone: cleanPhone,
-          fulfillment_type: fulfillment,
-          delivery_address:
-            fulfillment === "DELIVERY" ? deliveryAddress.trim() : "",
-          source: "WEB",
-          items: [{ product_id: product.id, quantity: qty }],
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.products) setProducts(data.products);
-        if (data.myOrders) {
-          setSearchedNick(cleanNick);
-          setSearchedPhone(cleanPhone);
-          setAllOrders(data.myOrders);
-        }
-      }
-    } catch {
-      // ignore network fallback error
-    }
-
-    setOrderModalProduct(null);
   };
 
-  // 장바구니 -> 공구방으로 이동
+  // 장바구니 주문 접수
   const handleCartGoToKakao = async () => {
+    if (isSubmittingOrder) return;
     if (cartItems.length === 0) {
       alert("장바구니가 비어 있습니다.");
       return;
@@ -376,68 +409,16 @@ export default function CustomerStorePage() {
       return;
     }
 
-    if (cartFulfillment === "DELIVERY" && !deliveryAddress.trim()) {
-      alert("배송 받으실 주소를 입력해 주세요!");
-      return;
-    }
-
-    const copyText = buildClipboardText(
+    const ok = await submitWebOrder(
       cleanNick,
-      cartFulfillment,
+      cleanPhone,
+      cartItems.map((c) => ({ product_id: c.id, quantity: c.qty })),
       cartItems.map((c) => ({ name: c.name, qty: c.qty })),
-      deliveryAddress
+      true
     );
-
-    // 1. 클립보드 복사
-    await copyTextSafe(copyText);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(NICK_STORAGE_KEY, cleanNick);
-      localStorage.setItem(PHONE_STORAGE_KEY, cleanPhone);
+    if (ok) {
+      setIsCartModalOpen(false);
     }
-
-    showToast("제품 내역 복사됐어요.\n공구방에 붙여넣기 후 전송하시면 예약됩니다");
-
-    // 2. 오픈카톡방 열기
-    const link = (settings?.kakao_openchat_url || "").trim();
-    if (link) {
-      window.open(link, "_blank");
-    } else {
-      alert("공구방 링크가 설정되지 않았습니다.\n주문 내용은 클립보드에 복사되었습니다.");
-    }
-
-    // 3. 서버 주문 기록 및 재고 반영
-    try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kakao_nickname: cleanNick,
-          customer_phone: cleanPhone,
-          fulfillment_type: cartFulfillment,
-          delivery_address:
-            cartFulfillment === "DELIVERY" ? deliveryAddress.trim() : "",
-          source: "WEB",
-          items: cartItems.map((c) => ({
-            product_id: c.id,
-            quantity: c.qty,
-          })),
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.products) setProducts(data.products);
-        if (data.myOrders) {
-          setSearchedNick(cleanNick);
-          setSearchedPhone(cleanPhone);
-          setAllOrders(data.myOrders);
-        }
-      }
-    } catch {
-      // ignore network error
-    }
-
-    updateCartState([]);
-    setIsCartModalOpen(false);
   };
 
   const scrollToTop = () => {
@@ -453,18 +434,14 @@ export default function CustomerStorePage() {
     [cartItems]
   );
 
-  // 카테고리별 개수 계산 (픽업 | 배송)
-  const categoryCounts = useMemo(() => {
-    return {
-      ALL: products.length,
-      PICKUP: products.filter((p) => p.category === "PICKUP").length,
-      DELIVERY: products.filter((p) => p.category === "DELIVERY").length,
-    };
-  }, [products]);
-
-  // 예약 조회 필터
+  // 예약 조회 필터 (Asia/Seoul KST 기준)
   const filteredReservations = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
     const valid = allOrders.filter((o) => o.status !== "CANCELED");
 
     if (resTab === "TODAY") {
@@ -479,12 +456,9 @@ export default function CustomerStorePage() {
     return filteredReservations.reduce((sum, o) => sum + o.total_amount, 0);
   }, [filteredReservations]);
 
-  // 필터링된 상품 목록
+  // 필터링된 상품 목록 (매장 픽업 단일)
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
-      if (selectedCategory !== "ALL" && p.category !== selectedCategory) {
-        return false;
-      }
       if (productSearch.trim()) {
         return (
           matchesKoreanSearch(p.name, productSearch) ||
@@ -494,7 +468,7 @@ export default function CustomerStorePage() {
       }
       return true;
     });
-  }, [products, selectedCategory, productSearch]);
+  }, [products, productSearch]);
 
   return (
     <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased pb-28">
@@ -539,7 +513,7 @@ export default function CustomerStorePage() {
                 {settings?.subtitle || "매일 새벽 경매 1등품 직송 신선 과일"}
               </p>
               <p className="text-[11px] text-[#03B26C] font-semibold mt-1 truncate">
-                📍 {settings?.pickup_guide || "매장 픽업 / 배송 가능"}
+                📍 {settings?.pickup_guide || "매장 방문 픽업 안내"}
               </p>
             </div>
           </div>
@@ -612,6 +586,19 @@ export default function CustomerStorePage() {
           {/* 예약 조회 결과 영역 */}
           {isSearching ? (
             <div className="text-center py-5 text-sm text-[#8B95A1]">조회중...</div>
+          ) : lookupError ? (
+            <div className="bg-white rounded-2xl border border-rose-200 p-4 text-center space-y-2">
+              <div className="text-xs font-semibold text-[#F04452]">
+                {lookupError}
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchReservation(searchedNick || nickInput, searchedPhone || phoneInput)}
+                className="px-3.5 py-1.5 rounded-xl bg-[#4F92F8] text-white text-xs font-bold"
+              >
+                다시 조회
+              </button>
+            </div>
           ) : (
             searchedNick && (
               <div className="bg-white rounded-2xl border border-[#E5E8EB] shadow-xs overflow-hidden">
@@ -664,16 +651,8 @@ export default function CustomerStorePage() {
                                 {item.product_name}
                               </div>
                               <div className="text-xs text-[#8B95A1] flex items-center gap-2 flex-wrap">
-                                <span
-                                  className={`font-bold ${
-                                    order.fulfillment_type === "DELIVERY"
-                                      ? "text-[#03B26C]"
-                                      : "text-[#1B64DA]"
-                                  }`}
-                                >
-                                  {order.fulfillment_type === "DELIVERY"
-                                    ? "🚚 배송"
-                                    : "🏬 픽업"}
+                                <span className="font-bold text-[#1B64DA]">
+                                  🏬 매장 픽업
                                 </span>
                                 <span>📅 {order.order_date}</span>
                                 {item.is_received ? (
@@ -710,11 +689,16 @@ export default function CustomerStorePage() {
         </section>
 
         {/* -------------------------------------------------------------
-            SECTION 2: 현재 구매 가능 제품 (픽업 | 배송 2파트 분류)
+            SECTION 2: 현재 구매 가능 제품 (매장 픽업)
            ------------------------------------------------------------- */}
         <section className="pt-5 border-t border-[#E5E8EB]">
-          <div className="text-[1.15rem] font-bold text-[#191F28] mb-3">
-            현재 구매 가능 제품
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[1.15rem] font-bold text-[#191F28]">
+              오늘의 픽업 상품 ({filteredProducts.length})
+            </div>
+            <span className="px-2.5 py-1 rounded-full bg-[#E8F3FF] text-[#1B64DA] text-xs font-bold">
+              🏬 매장 픽업 전용
+            </span>
           </div>
 
           {/* 제품명 실시간 검색 */}
@@ -728,30 +712,6 @@ export default function CustomerStorePage() {
             />
           </div>
 
-          {/* 상단 고정 카테고리 탭: 전체 | 픽업 | 배송 */}
-          <div className="sticky top-14 z-30 bg-[#F2F4F6] py-2 flex gap-2 overflow-x-auto no-scrollbar mb-3">
-            {[
-              { id: "ALL", label: `전체 (${categoryCounts.ALL})` },
-              { id: "PICKUP", label: `🏬 픽업 (${categoryCounts.PICKUP})` },
-              { id: "DELIVERY", label: `🚚 배송 (${categoryCounts.DELIVERY})` },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() =>
-                  setSelectedCategory(tab.id as "ALL" | ProductCategory)
-                }
-                className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition ${
-                  selectedCategory === tab.id
-                    ? "bg-[#4F92F8] text-white border border-[#4F92F8] shadow-xs"
-                    : "bg-white text-[#191F28] border border-[#E5E8EB] hover:bg-slate-50"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
           {/* 제품 카드 목록 */}
           <div className="space-y-3">
             {loading ? (
@@ -760,7 +720,7 @@ export default function CustomerStorePage() {
               </div>
             ) : filteredProducts.length === 0 ? (
               <div className="text-center py-10 text-sm text-[#8B95A1] bg-white rounded-2xl border border-[#E5E8EB]">
-                해당 카테고리에 등록된 제품이 없습니다.
+                현재 등록된 판매 상품이 없습니다.
               </div>
             ) : (
               filteredProducts.map((product) => {
@@ -807,16 +767,8 @@ export default function CustomerStorePage() {
                       {/* 정보 영역 */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 mb-1.5">
-                          <span
-                            className={`px-2 py-0.5 rounded-md text-[11px] font-bold shrink-0 ${
-                              product.category === "DELIVERY"
-                                ? "bg-[#E8F8F0] text-[#03B26C]"
-                                : "bg-[#E8F3FF] text-[#1B64DA]"
-                            }`}
-                          >
-                            {product.category === "DELIVERY"
-                              ? "🚚 배송"
-                              : "🏬 픽업"}
+                          <span className="px-2 py-0.5 rounded-md text-[11px] font-bold shrink-0 bg-[#E8F3FF] text-[#1B64DA]">
+                            🏬 픽업
                           </span>
                           <div
                             className={`font-bold text-[1.02rem] truncate ${
@@ -1026,75 +978,17 @@ export default function CustomerStorePage() {
                 </p>
               </div>
 
-              {/* 수령 방식 선택 (픽업 | 배송) */}
-              <div>
-                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                  수령 방식
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setOrderModalProduct((prev) =>
-                        prev ? { ...prev, fulfillment: "PICKUP" } : null
-                      )
-                    }
-                    className={`py-2.5 rounded-xl text-xs font-bold border transition ${
-                      orderModalProduct.fulfillment === "PICKUP"
-                        ? "bg-[#4F92F8] text-white border-[#4F92F8]"
-                        : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
-                    }`}
-                  >
-                    🏬 매장 픽업
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setOrderModalProduct((prev) =>
-                        prev ? { ...prev, fulfillment: "DELIVERY" } : null
-                      )
-                    }
-                    className={`py-2.5 rounded-xl text-xs font-bold border transition ${
-                      orderModalProduct.fulfillment === "DELIVERY"
-                        ? "bg-[#3FC08E] text-white border-[#3FC08E]"
-                        : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
-                    }`}
-                  >
-                    🚚 배송
-                  </button>
-                </div>
-              </div>
-
-              {orderModalProduct.fulfillment === "DELIVERY" && (
-                <div>
-                  <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                    배송 받으실 주소 <span className="text-[#F04452]">*필수</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    placeholder="예: 유천동 현대아파트 101동 502호"
-                    className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
-                  />
-                </div>
-              )}
-
               <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
-                <em className="not-italic text-[#0064FF] font-semibold">
-                  공구방으로 이동
-                </em>
-                하여 채팅창에 붙여넣기 하시면
-                <br />
-                집계 프로그램에 예약을 도와 드립니다
+                매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가 자동 복사됩니다.
               </p>
 
               <button
                 type="button"
+                disabled={isSubmittingOrder}
                 onClick={() => void handleSingleOrderGoToKakao()}
-                className="w-full py-3.5 rounded-xl bg-[#4F92F8] hover:bg-[#3E82EB] text-white font-bold text-base shadow-md transition"
+                className="w-full py-3.5 rounded-xl bg-[#4F92F8] hover:bg-[#3E82EB] disabled:opacity-60 text-white font-bold text-base shadow-md transition"
               >
-                공구방으로 이동
+                {isSubmittingOrder ? "예약 접수 중..." : "픽업 예약하기"}
               </button>
             </div>
           </div>
@@ -1215,59 +1109,8 @@ export default function CustomerStorePage() {
                     </p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                      수령 방식 선택
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setCartFulfillment("PICKUP")}
-                        className={`py-2.5 rounded-xl text-xs font-bold border transition ${
-                          cartFulfillment === "PICKUP"
-                            ? "bg-[#4F92F8] text-white border-[#4F92F8]"
-                            : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
-                        }`}
-                      >
-                        🏬 매장 픽업
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCartFulfillment("DELIVERY")}
-                        className={`py-2.5 rounded-xl text-xs font-bold border transition ${
-                          cartFulfillment === "DELIVERY"
-                            ? "bg-[#3FC08E] text-white border-[#3FC08E]"
-                            : "bg-[#F2F4F6] text-[#191F28] border-[#E5E8EB]"
-                        }`}
-                      >
-                        🚚 배송
-                      </button>
-                    </div>
-                  </div>
-
-                  {cartFulfillment === "DELIVERY" && (
-                    <div>
-                      <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                        배송 받으실 주소{" "}
-                        <span className="text-[#F04452]">*필수</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={deliveryAddress}
-                        onChange={(e) => setDeliveryAddress(e.target.value)}
-                        placeholder="예: 유천동 현대아파트 101동 502호"
-                        className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
-                      />
-                    </div>
-                  )}
-
                   <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
-                    <em className="not-italic text-[#0064FF] font-semibold">
-                      공구방으로 이동
-                    </em>
-                    하여 채팅창에 붙여넣기 하시면
-                    <br />
-                    집계 프로그램에 예약을 도와 드립니다
+                    매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가 자동 복사됩니다.
                   </p>
                 </div>
               )}
@@ -1293,10 +1136,10 @@ export default function CustomerStorePage() {
               <button
                 type="button"
                 onClick={() => void handleCartGoToKakao()}
-                disabled={cartItems.length === 0}
+                disabled={cartItems.length === 0 || isSubmittingOrder}
                 className="flex-1 py-3 rounded-xl bg-[#3FC08E] hover:bg-[#34B07F] disabled:bg-[#E5E8EB] disabled:text-[#B0B8C1] text-white font-bold text-sm shadow-md transition"
               >
-                공구방으로 이동
+                {isSubmittingOrder ? "예약 접수 중..." : "픽업 예약하기"}
               </button>
             </div>
           </div>
@@ -1372,16 +1215,8 @@ export default function CustomerStorePage() {
 
               <div className="p-4 rounded-xl bg-[#F2F4F6] text-sm text-[#191F28] leading-relaxed whitespace-pre-wrap">
                 <div className="flex items-center gap-2 mb-1.5">
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-xs font-bold ${
-                      promoProduct.category === "DELIVERY"
-                        ? "bg-[#E8F8F0] text-[#03B26C]"
-                        : "bg-[#E8F3FF] text-[#1B64DA]"
-                    }`}
-                  >
-                    {promoProduct.category === "DELIVERY"
-                      ? "🚚 배송 상품"
-                      : "🏬 매장 픽업 상품"}
+                  <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-[#E8F3FF] text-[#1B64DA]">
+                    🏬 매장 픽업 상품
                   </span>
                 </div>
                 <div className="font-bold text-base mb-1">
@@ -1419,6 +1254,89 @@ export default function CustomerStorePage() {
               >
                 장바구니
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------
+          6-2. 모달 D: 픽업 예약 완료 & 공구방 안내 모달
+         ------------------------------------------------------------- */}
+      {orderSuccessReceipt && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-[#191F28]/45 flex items-center justify-center p-4"
+          onClick={() => setOrderSuccessReceipt(null)}
+        >
+          <div
+            className="bg-white w-full max-w-[390px] rounded-2xl border border-[#E5E8EB] shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-[#E5E8EB] flex items-center justify-between">
+              <h2 className="text-base font-bold text-[#191F28] m-0">
+                ✅ 픽업 예약이 접수되었습니다
+              </h2>
+              <button
+                type="button"
+                onClick={() => setOrderSuccessReceipt(null)}
+                className="w-8 h-8 rounded-full bg-[#F2F4F6] text-[#8B95A1] text-lg font-bold flex items-center justify-center"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3.5">
+              <div className="p-3.5 rounded-xl bg-[#E8F8F0] border border-[#b8ebd4] text-xs text-[#027A48] font-semibold leading-relaxed">
+                {orderSuccessReceipt.copied
+                  ? "주문서가 클립보드에 복사되었습니다. 아래 [공구방으로 이동] 버튼을 눌러 채팅방에 붙여넣기해 주세요!"
+                  : "예약 접수가 완료되었습니다. 아래 [주문서 복사] 후 공구방에 붙여넣기해 주세요!"}
+              </div>
+
+              <pre className="p-3.5 rounded-xl bg-[#F2F4F6] text-xs text-[#191F28] whitespace-pre-wrap font-sans leading-relaxed">
+                {orderSuccessReceipt.clipboardText}
+              </pre>
+
+              <div className="text-right text-sm font-bold text-[#0064FF]">
+                결제 예정 금액: {formatKRW(orderSuccessReceipt.order.total_amount)}
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await copyTextSafe(orderSuccessReceipt.clipboardText);
+                    if (ok) {
+                      setOrderSuccessReceipt((prev) =>
+                        prev ? { ...prev, copied: true } : null
+                      );
+                      showToast("주문서가 다시 복사되었습니다!");
+                    }
+                  }}
+                  className="flex-1 py-3 rounded-xl bg-[#F2F4F6] text-[#191F28] font-bold text-sm hover:bg-[#E5E8EB] transition"
+                >
+                  주문서 복사
+                </button>
+                {settings?.kakao_openchat_url ? (
+                  <a
+                    href={settings.kakao_openchat_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setOrderSuccessReceipt(null)}
+                    className="flex-1 py-3 rounded-xl bg-[#FEE500] text-[#191919] font-extrabold text-sm text-center hover:brightness-95 transition"
+                  >
+                    공구방으로 이동
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setOrderSuccessReceipt(null)}
+                    className="flex-1 py-3 rounded-xl bg-[#4F92F8] text-white font-bold text-sm"
+                  >
+                    확인
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

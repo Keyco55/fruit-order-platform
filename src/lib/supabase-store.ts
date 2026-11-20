@@ -3,6 +3,7 @@ import { createInitialSeedData } from "@/lib/store";
 import {
   buildProductAggregations,
   enrichAndFilterOrders,
+  getKstDateString,
 } from "@/lib/store-helpers";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 import type {
@@ -48,7 +49,7 @@ interface RawProductRow {
 interface RawOrderItemRow {
   id: string;
   order_id: string;
-  product_id: string;
+  product_id: string | null;
   product_name: string;
   unit_label: string;
   unit_price: number;
@@ -296,6 +297,7 @@ export async function createOrderSupabase(
     p_memo: input.memo ?? "",
     p_source: input.source ?? "WEB",
     p_items: validItems,
+    p_idempotency_key: input.idempotency_key?.trim() || null,
   });
 
   if (error || !orderId) {
@@ -338,6 +340,20 @@ export async function createProductAdminSupabase(
   input: CreateProductInput
 ): Promise<Product> {
   const client = getSupabaseAdminClient();
+  const idemKey = input.idempotency_key?.trim() || null;
+
+  if (idemKey) {
+    const { data: existing, error: existingErr } = await client
+      .from("products")
+      .select("*")
+      .eq("idempotency_key", idemKey)
+      .maybeSingle();
+    throwIfError(existingErr, "중복 상품 여부를 확인하지 못했습니다.");
+    if (existing) {
+      return mapProductRow(existing as RawProductRow);
+    }
+  }
+
   const { data: topRows, error: sortErr } = await client
     .from("products")
     .select("sort_order")
@@ -347,19 +363,24 @@ export async function createProductAdminSupabase(
   throwIfError(sortErr, "상품 정렬 순서를 조회하지 못했습니다.");
 
   const maxSort = topRows?.[0]?.sort_order ?? 0;
-  const totalStock = input.is_limited ? Math.max(0, input.total_stock) : 999;
+  const totalStock = input.is_limited
+    ? Math.max(0, Math.floor(Number(input.total_stock ?? 0)))
+    : 999;
   const remainStock = input.is_limited
-    ? Math.max(0, input.remain_stock ?? totalStock)
+    ? Math.min(
+        totalStock,
+        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock)))
+      )
     : 999;
 
   const insertPayload = {
-    sale_date: input.sale_date ?? new Date().toISOString().slice(0, 10),
+    sale_date: input.sale_date ?? getKstDateString(),
     category: input.category,
     name: input.name.trim(),
     unit_label: input.unit_label.trim() || "1팩",
-    price: Math.max(0, Number(input.price) || 0),
+    price: Math.max(0, Math.floor(Number(input.price) || 0)),
     original_price: input.original_price
-      ? Math.max(0, Number(input.original_price))
+      ? Math.max(0, Math.floor(Number(input.original_price)))
       : null,
     origin: (input.origin ?? "국산").trim(),
     brix: input.brix?.trim() || null,
@@ -377,6 +398,7 @@ export async function createProductAdminSupabase(
     is_received: input.is_received ?? true,
     is_visible: input.is_visible ?? true,
     sort_order: maxSort + 1,
+    idempotency_key: idemKey,
   };
 
   const { data, error } = await client
@@ -384,6 +406,16 @@ export async function createProductAdminSupabase(
     .insert(insertPayload)
     .select("*")
     .single();
+
+  if (error && error.code === "23505" && idemKey) {
+    const { data: dupRow, error: dupErr } = await client
+      .from("products")
+      .select("*")
+      .eq("idempotency_key", idemKey)
+      .single();
+    throwIfError(dupErr, "중복 등록 상품 조회에 실패했습니다.");
+    return mapProductRow(dupRow as RawProductRow);
+  }
 
   throwIfError(error, "상품 등록에 실패했습니다.");
   return mapProductRow(data as RawProductRow);
@@ -402,6 +434,42 @@ export async function updateProductAdminSupabase(
   delete sanitizedPatch.id;
   delete sanitizedPatch.created_at;
 
+  if (
+    sanitizedPatch.remain_stock !== undefined ||
+    sanitizedPatch.total_stock !== undefined
+  ) {
+    const { data: currentRow, error: curErr } = await client
+      .from("products")
+      .select("is_limited, total_stock, remain_stock")
+      .eq("id", productId)
+      .maybeSingle();
+
+    throwIfError(curErr, "상품 재고 정보를 조회하지 못했습니다.");
+    if (!currentRow) {
+      throw new Error("상품을 찾을 수 없습니다.");
+    }
+
+    const nextLimited =
+      typeof sanitizedPatch.is_limited === "boolean"
+        ? sanitizedPatch.is_limited
+        : currentRow.is_limited;
+
+    if (nextLimited) {
+      const nextTotal =
+        sanitizedPatch.total_stock !== undefined
+          ? Math.max(0, Math.floor(Number(sanitizedPatch.total_stock) || 0))
+          : currentRow.total_stock;
+      const rawRemain =
+        sanitizedPatch.remain_stock !== undefined
+          ? Math.max(0, Math.floor(Number(sanitizedPatch.remain_stock) || 0))
+          : currentRow.remain_stock;
+
+      const resolvedTotal = Math.max(nextTotal, rawRemain);
+      sanitizedPatch.total_stock = resolvedTotal;
+      sanitizedPatch.remain_stock = Math.min(resolvedTotal, rawRemain);
+    }
+  }
+
   const { data, error } = await client
     .from("products")
     .update(sanitizedPatch)
@@ -413,6 +481,27 @@ export async function updateProductAdminSupabase(
   if (!data) {
     throw new Error("상품을 찾을 수 없습니다.");
   }
+  return mapProductRow(data as RawProductRow);
+}
+
+export async function adjustProductStockAdminSupabase(
+  productId: string,
+  delta: number
+): Promise<Product> {
+  if (!isValidUuid(productId)) {
+    throw new Error("상품을 찾을 수 없습니다.");
+  }
+
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client.rpc("adjust_fruit_product_stock", {
+    p_product_id: productId,
+    p_delta: Math.trunc(delta),
+  });
+
+  if (error || !data) {
+    throw new Error(error?.message || "재고 수량 조정에 실패했습니다.");
+  }
+
   return mapProductRow(data as RawProductRow);
 }
 
@@ -429,14 +518,7 @@ export async function deleteProductAdminSupabase(
     .delete()
     .eq("id", productId);
 
-  if (error) {
-    if (error.code === "23503") {
-      throw new Error(
-        "이미 주문 내역이 있는 상품은 삭제할 수 없습니다. '숨김' 처리를 이용해 주세요."
-      );
-    }
-    throw new Error(error.message || "상품 삭제에 실패했습니다.");
-  }
+  throwIfError(error, "상품 삭제에 실패했습니다.");
 }
 
 export async function resetDemoDatabaseSupabase(): Promise<{
@@ -543,7 +625,7 @@ export async function resetDemoDatabaseSupabase(): Promise<{
     o.items.map((item) => ({
       id: crypto.randomUUID(),
       order_id: orderIdMap.get(o.seedOrderId)!,
-      product_id: productIdMap.get(item.product_id)!,
+      product_id: item.product_id ? productIdMap.get(item.product_id) ?? null : null,
       product_name: item.product_name,
       unit_label: item.unit_label,
       unit_price: item.unit_price,

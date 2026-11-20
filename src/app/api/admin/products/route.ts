@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminRequestAuthenticated } from "@/lib/admin-auth";
 import {
+  adjustProductStockAdmin,
   createProductAdmin,
   deleteProductAdmin,
   getProductAggregations,
@@ -28,7 +29,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const product = await createProductAdmin(body);
+    const totalStock = Number(body.total_stock ?? 0);
+    if (!Number.isFinite(totalStock) || totalStock < 0) {
+      return NextResponse.json(
+        { error: "재고 수량은 0 이상의 정수여야 합니다." },
+        { status: 400 }
+      );
+    }
+
+    const product = await createProductAdmin({
+      ...body,
+      category: "PICKUP",
+      total_stock: Math.floor(totalStock),
+      remain_stock:
+        body.remain_stock !== undefined
+          ? Math.max(0, Math.floor(Number(body.remain_stock)))
+          : Math.floor(totalStock),
+    });
     const [products, aggregations] = await Promise.all([
       getProducts({ includeHidden: true }),
       getProductAggregations(),
@@ -60,7 +77,8 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       id: string;
-      patch: Partial<Omit<Product, "id" | "created_at">>;
+      stock_delta?: number;
+      patch?: Partial<Omit<Product, "id" | "created_at">>;
     };
 
     if (!body.id) {
@@ -70,7 +88,22 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const updated = await updateProductAdmin(body.id, body.patch);
+    let updated: Product;
+    if (typeof body.stock_delta === "number" && Number.isFinite(body.stock_delta)) {
+      updated = await adjustProductStockAdmin(body.id, body.stock_delta);
+    } else if (body.patch) {
+      const safePatch = { ...body.patch };
+      if (safePatch.category !== undefined) {
+        safePatch.category = "PICKUP";
+      }
+      updated = await updateProductAdmin(body.id, safePatch);
+    } else {
+      return NextResponse.json(
+        { error: "수정할 내용이 필요합니다." },
+        { status: 400 }
+      );
+    }
+
     const [products, aggregations] = await Promise.all([
       getProducts({ includeHidden: true }),
       getProductAggregations(),

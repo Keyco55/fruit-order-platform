@@ -100,6 +100,16 @@ export async function updateProductAdmin(
   return demoStore.updateProductAdmin(productId, patch);
 }
 
+export async function adjustProductStockAdmin(
+  productId: string,
+  delta: number
+): Promise<Product> {
+  if (isSupabaseConfigured()) {
+    return supabaseStore.adjustProductStockAdminSupabase(productId, delta);
+  }
+  return demoStore.adjustProductStockAdmin(productId, delta);
+}
+
 export async function deleteProductAdmin(productId: string): Promise<void> {
   if (isSupabaseConfigured()) {
     return supabaseStore.deleteProductAdminSupabase(productId);
@@ -113,7 +123,7 @@ export async function resetDemoDatabase(): Promise<{
   orders: Order[];
 }> {
   if (isSupabaseConfigured()) {
-    return supabaseStore.resetDemoDatabaseSupabase();
+    throw new Error("실운영 DB 모드에서는 전체 초기화를 실행할 수 없습니다.");
   }
   return demoStore.resetDemoDatabase();
 }

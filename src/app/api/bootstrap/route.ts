@@ -7,6 +7,10 @@ import {
   getProducts,
   getStoreSettings,
 } from "@/lib/repository";
+import {
+  normalizePhoneDigits,
+  sanitizeOrdersForPublic,
+} from "@/lib/store-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -45,10 +49,15 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const myOrders =
-      nickname || phone || phoneLast4
-        ? await getOrders({ nickname, phone, phoneLast4, includeCanceled: true })
-        : [];
+    const hasValidLookupQuery =
+      Boolean(nickname?.trim()) &&
+      normalizePhoneDigits(phone ?? phoneLast4).length >= 4;
+
+    const myOrders = hasValidLookupQuery
+      ? sanitizeOrdersForPublic(
+          await getOrders({ nickname, phone, phoneLast4, includeCanceled: true })
+        )
+      : [];
 
     const { admin_pin: _pin, ...publicSettings } = settings;
 

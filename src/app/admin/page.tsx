@@ -238,6 +238,24 @@ export default function AdminDashboardPage() {
     showToast(successMsg);
   };
 
+  // 과일 재고 원자적 증감 (H05)
+  const handleAdjustProductStock = async (productId: string, delta: number) => {
+    const res = await fetch("/api/admin/products", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: productId, stock_delta: delta }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "재고 조정 실패");
+      return;
+    }
+    setProducts(data.products);
+    setAggregations(data.aggregations);
+    setLastUpdatedAt(formatClockNow());
+    showToast("📦 재고 수량이 즉시 반영되었습니다.");
+  };
+
   // 과일 등록
   const handleCreateProduct = async (
     input: CreateProductInput
@@ -293,10 +311,7 @@ export default function AdminDashboardPage() {
     }
     setBotReply(data.reply);
     if (data.matched) {
-      setOrders(data.orders);
-      setProducts(data.products);
-      setAggregations(data.aggregations);
-      setLastUpdatedAt(formatClockNow());
+      await fetchAdminData();
       showToast("🤖 카톡 채팅이 자동으로 주문 장부에 집계되었습니다!");
     } else {
       showToast("💬 일반 대화로 분류되어 집계에서 제외되었습니다.");
@@ -529,15 +544,17 @@ export default function AdminDashboardPage() {
                 <Download className="w-3.5 h-3.5" />
                 <span>엑셀(CSV)</span>
               </button>
-              <button
-                type="button"
-                onClick={handleResetDemo}
-                title="샘플 데이터를 처음 상태로 되돌립니다"
-                className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>데모 초기화</span>
-              </button>
+              {dataMode === "demo" && (
+                <button
+                  type="button"
+                  onClick={handleResetDemo}
+                  title="데모 샘플 데이터를 처음 상태로 되돌립니다"
+                  className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>데모 초기화</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleLockAdmin}
@@ -681,6 +698,7 @@ export default function AdminDashboardPage() {
             onRefresh={() => void handleRefreshTab("PRODUCTS", "상품·재고")}
             onCreateProduct={handleCreateProduct}
             onPatchProduct={handlePatchProduct}
+            onAdjustStock={handleAdjustProductStock}
             onDeleteProduct={handleDeleteProduct}
             showToast={showToast}
           />
