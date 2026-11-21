@@ -1,11 +1,8 @@
-import type {
-  Order,
-  Product,
-  ProductAggregation,
-} from "@/types/domain";
+import type { Order, Product, ProductAggregation } from "@/types/domain";
+import { filterOrderPeriod, type OrderQuery } from "@/lib/order-period";
 
 export function normalizePhoneDigits(value?: string): string {
-  return (value ?? "").replace(/\D/g, "");
+  return typeof value === "string" ? value.replace(/\D/g, "") : "";
 }
 
 export function getKstDateString(date = new Date()): string {
@@ -24,15 +21,10 @@ export function getKstDateString(date = new Date()): string {
 export function enrichAndFilterOrders(
   rawOrders: Order[],
   products: Array<Pick<Product, "id" | "is_received">>,
-  options?: {
-    nickname?: string;
-    phone?: string;
-    phoneLast4?: string;
-    includeCanceled?: boolean;
-  }
+  options?: OrderQuery,
 ): Order[] {
   const productReceivedMap = new Map<string, boolean>(
-    products.map((p) => [p.id, p.is_received])
+    products.map((p) => [p.id, p.is_received]),
   );
 
   let orders = rawOrders.map((order) => ({
@@ -40,26 +32,30 @@ export function enrichAndFilterOrders(
     items: order.items.map((item) => ({
       ...item,
       is_received: item.product_id
-        ? productReceivedMap.get(item.product_id) ?? true
+        ? (productReceivedMap.get(item.product_id) ?? true)
         : true,
     })),
   }));
 
   if (options?.nickname !== undefined) {
-    const targetNick = options.nickname.trim().toLowerCase().replace(/\s+/g, "");
+    const targetNick = options.nickname
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "");
     if (!targetNick) {
       return [];
     }
     orders = orders.filter(
       (o) =>
-        o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "") === targetNick
+        o.kakao_nickname.trim().toLowerCase().replace(/\s+/g, "") ===
+        targetNick,
     );
   }
 
   const rawPhoneFilter = options?.phone ?? options?.phoneLast4;
   if (rawPhoneFilter !== undefined) {
     const queryPhoneDigits = normalizePhoneDigits(rawPhoneFilter);
-    if (queryPhoneDigits.length < 4) {
+    if (!/^(?:\d{4}|\d{9,13})$/.test(queryPhoneDigits)) {
       return [];
     }
     orders = orders.filter((o) => {
@@ -68,7 +64,8 @@ export function enrichAndFilterOrders(
       if (storedDigits) {
         return (
           storedDigits === queryPhoneDigits ||
-          storedDigits.endsWith(queryPhoneDigits)
+          (queryPhoneDigits.length === 4 &&
+            storedDigits.endsWith(queryPhoneDigits))
         );
       }
       if (last4Digits) {
@@ -85,8 +82,9 @@ export function enrichAndFilterOrders(
     orders = orders.filter((o) => o.status !== "CANCELED");
   }
 
-  return orders.sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  return filterOrderPeriod(orders, options?.fromDate, options?.toDate).sort(
+    (a, b) =>
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 }
 
@@ -95,9 +93,29 @@ export function enrichAndFilterOrders(
  */
 export function sanitizeOrdersForPublic(orders: Order[]): Order[] {
   return orders.map((order) => ({
-    ...order,
-    customer_phone: undefined,
-    delivery_address: undefined,
+    id: order.id,
+    order_date: order.order_date,
+    kakao_nickname: order.kakao_nickname,
+    customer_phone_last4: "",
+    fulfillment_type: order.fulfillment_type,
+    total_amount: order.total_amount,
+    status: order.status,
+    is_paid: order.is_paid,
+    source: order.source,
+    pickup_time: order.pickup_time,
+    memo: "",
+    created_at: order.created_at,
+    items: order.items.map((i) => ({
+      id: i.id,
+      order_id: i.order_id,
+      product_id: i.product_id,
+      product_name: i.product_name,
+      unit_label: i.unit_label,
+      unit_price: i.unit_price,
+      quantity: i.quantity,
+      subtotal: i.subtotal,
+      is_received: i.is_received,
+    })),
   }));
 }
 
@@ -106,7 +124,7 @@ export function sanitizeOrdersForPublic(orders: Order[]): Order[] {
  */
 export function buildProductAggregations(
   products: Product[],
-  orders: Order[]
+  orders: Order[],
 ): ProductAggregation[] {
   const activeOrders = orders.filter((o) => o.status !== "CANCELED");
 
@@ -121,7 +139,7 @@ export function buildProductAggregations(
 
       for (const order of activeOrders) {
         const matchedItems = order.items.filter(
-          (i) => i.product_id === product.id
+          (i) => i.product_id === product.id,
         );
         if (matchedItems.length > 0) {
           order_count += 1;

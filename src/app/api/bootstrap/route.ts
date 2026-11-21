@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { consumeRateLimit } from "@/lib/rate-limit";
+import { validLookup } from "@/lib/order-validation";
+import { readPeriod } from "@/lib/order-period";
+import { buildProductAggregations } from "@/lib/store-helpers";
 import { isAdminRequestAuthenticated } from "@/lib/admin-auth";
 import {
   getDataSourceMode,
   getOrders,
-  getProductAggregations,
   getProducts,
   getStoreSettings,
 } from "@/lib/repository";
-import {
-  normalizePhoneDigits,
-  sanitizeOrdersForPublic,
-} from "@/lib/store-helpers";
+import { sanitizeOrdersForPublic } from "@/lib/store-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +19,10 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const isAdmin = searchParams.get("admin") === "1";
 
-    if (isAdmin && !isAdminRequestAuthenticated(request)) {
+    if (isAdmin && !(await isAdminRequestAuthenticated(request))) {
       return NextResponse.json(
         { error: "관리자 인증이 필요합니다." },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -36,26 +36,36 @@ export async function GET(request: NextRequest) {
     ]);
 
     if (isAdmin) {
-      const [orders, aggregations] = await Promise.all([
-        getOrders({ includeCanceled: true }),
-        getProductAggregations(),
+      const [orders] = await Promise.all([
+        getOrders({ includeCanceled: true, ...readPeriod(searchParams) }),
       ]);
       return NextResponse.json({
         mode: getDataSourceMode(),
-        settings,
+        settings: (({ admin_pin: _credential, ...safe }) => safe)(settings),
         products,
         orders,
-        aggregations,
+        aggregations: buildProductAggregations(products, orders),
       });
     }
 
-    const hasValidLookupQuery =
-      Boolean(nickname?.trim()) &&
-      normalizePhoneDigits(phone ?? phoneLast4).length >= 4;
+    const hasValidLookupQuery = validLookup(nickname, phone ?? phoneLast4);
 
+    if (
+      hasValidLookupQuery &&
+      !(await consumeRateLimit(request, "customer-lookup", 30))
+    )
+      return NextResponse.json(
+        { error: "조회가 많습니다. 10분 후 다시 시도해 주세요." },
+        { status: 429 },
+      );
     const myOrders = hasValidLookupQuery
       ? sanitizeOrdersForPublic(
-          await getOrders({ nickname, phone, phoneLast4, includeCanceled: true })
+          await getOrders({
+            nickname,
+            phone,
+            phoneLast4,
+            includeCanceled: true,
+          }),
         )
       : [];
 

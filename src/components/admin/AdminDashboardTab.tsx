@@ -6,12 +6,7 @@ import { formatKRW } from "@/lib/formatters";
 import type { Order, Product, ProductAggregation } from "@/types/domain";
 
 export type QuickOrderFilter =
-  | "ALL"
-  | "WAITING"
-  | "READY"
-  | "PICKED_UP"
-  | "UNPAID"
-  | "CANCELED";
+  "ALL" | "WAITING" | "READY" | "PICKED_UP" | "UNPAID" | "CANCELED";
 
 interface AdminDashboardTabProps {
   aggregations: ProductAggregation[];
@@ -22,8 +17,8 @@ interface AdminDashboardTabProps {
   onPatchProduct: (
     productId: string,
     patch: Partial<Product>,
-    successMsg: string
-  ) => Promise<void>;
+    successMsg: string,
+  ) => Promise<boolean>;
   onJumpToOrders: (filter: QuickOrderFilter) => void;
 }
 
@@ -40,7 +35,7 @@ export function AdminDashboardTab({
 
   const activeOrders = useMemo(
     () => orders.filter((o) => o.status !== "CANCELED"),
-    [orders]
+    [orders],
   );
 
   // 주문 진행 및 결제 통계
@@ -48,7 +43,9 @@ export function AdminDashboardTab({
     const total = activeOrders.length;
     const reserved = activeOrders.filter((o) => o.status === "RESERVED").length;
     const ready = activeOrders.filter((o) => o.status === "READY").length;
-    const pickedUp = activeOrders.filter((o) => o.status === "PICKED_UP").length;
+    const pickedUp = activeOrders.filter(
+      (o) => o.status === "PICKED_UP",
+    ).length;
     const paid = activeOrders.filter((o) => o.is_paid).length;
     const unpaid = total - paid;
 
@@ -60,15 +57,17 @@ export function AdminDashboardTab({
     const sorted = [...aggregations].sort((a, b) =>
       chartMetric === "QTY"
         ? b.ordered_quantity - a.ordered_quantity
-        : b.ordered_amount - a.ordered_amount
+        : b.ordered_amount - a.ordered_amount,
     );
     const totalValue = sorted.reduce(
       (sum, item) =>
-        sum + (chartMetric === "QTY" ? item.ordered_quantity : item.ordered_amount),
-      0
+        sum +
+        (chartMetric === "QTY" ? item.ordered_quantity : item.ordered_amount),
+      0,
     );
     const maxValue = sorted.reduce((max, item) => {
-      const val = chartMetric === "QTY" ? item.ordered_quantity : item.ordered_amount;
+      const val =
+        chartMetric === "QTY" ? item.ordered_quantity : item.ordered_amount;
       return val > max ? val : max;
     }, 0);
 
@@ -99,12 +98,41 @@ export function AdminDashboardTab({
             disabled={isRefreshing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 shadow-2xs transition"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-emerald-600" : ""}`} />
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-emerald-600" : ""}`}
+            />
             <span>{isRefreshing ? "새로고침 중..." : "대시보드 새로고침"}</span>
           </button>
         </div>
       </div>
 
+      <section
+        className="rounded-2xl border border-amber-100 bg-amber-50 p-4 space-y-2"
+        aria-label="우선 처리"
+      >
+        <h3 className="text-sm font-extrabold">먼저 확인할 일 · 선택 기간</h3>
+        <button
+          type="button"
+          className="text-sm underline"
+          onClick={() => onJumpToOrders("WAITING")}
+        >
+          준비할 예약 {breakdown.reserved}건
+        </button>
+        <button
+          type="button"
+          className="ml-3 text-sm underline"
+          onClick={() => onJumpToOrders("UNPAID")}
+        >
+          미입금 {breakdown.unpaid}건
+        </button>
+        <p className="text-xs text-amber-900">
+          현재 부족 재고(3개 이하):{" "}
+          {aggregations
+            .filter((p) => p.is_limited && p.is_visible && p.remain_stock <= 3)
+            .map((p) => p.product_name)
+            .join(", ") || "없음"}
+        </p>
+      </section>
       {/* 1. 판매량 / 매출 시각화 그래프 카드 */}
       <section className="bg-white rounded-3xl p-5 shadow-xs border border-slate-100 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -161,10 +189,15 @@ export function AdminDashboardTab({
           <div className="space-y-3">
             {chartRows.sorted.map((item, idx) => {
               const value =
-                chartMetric === "QTY" ? item.ordered_quantity : item.ordered_amount;
+                chartMetric === "QTY"
+                  ? item.ordered_quantity
+                  : item.ordered_amount;
               const widthPct =
                 chartRows.maxValue > 0
-                  ? Math.max(value > 0 ? 6 : 0, Math.round((value / chartRows.maxValue) * 100))
+                  ? Math.max(
+                      value > 0 ? 6 : 0,
+                      Math.round((value / chartRows.maxValue) * 100),
+                    )
                   : 0;
               const sharePct =
                 chartRows.totalValue > 0
@@ -210,8 +243,8 @@ export function AdminDashboardTab({
                         idx === 0 && value > 0
                           ? "bg-gradient-to-r from-emerald-500 to-teal-500"
                           : value > 0
-                          ? "bg-emerald-400"
-                          : "bg-slate-200"
+                            ? "bg-emerald-400"
+                            : "bg-slate-200"
                       }`}
                       style={{ width: `${widthPct}%` }}
                     />
@@ -246,17 +279,23 @@ export function AdminDashboardTab({
               <>
                 <div
                   className="bg-amber-400 h-full transition-all"
-                  style={{ width: `${(breakdown.reserved / breakdown.total) * 100}%` }}
+                  style={{
+                    width: `${(breakdown.reserved / breakdown.total) * 100}%`,
+                  }}
                   title={`예약접수 ${breakdown.reserved}건`}
                 />
                 <div
                   className="bg-blue-500 h-full transition-all"
-                  style={{ width: `${(breakdown.ready / breakdown.total) * 100}%` }}
+                  style={{
+                    width: `${(breakdown.ready / breakdown.total) * 100}%`,
+                  }}
                   title={`준비완료 ${breakdown.ready}건`}
                 />
                 <div
                   className="bg-emerald-500 h-full transition-all"
-                  style={{ width: `${(breakdown.pickedUp / breakdown.total) * 100}%` }}
+                  style={{
+                    width: `${(breakdown.pickedUp / breakdown.total) * 100}%`,
+                  }}
                   title={`수령완료 ${breakdown.pickedUp}건`}
                 />
               </>
@@ -368,7 +407,8 @@ export function AdminDashboardTab({
               {aggregations.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-slate-400">
-                    등록된 상품이 없습니다. &apos;상품·재고 관리&apos; 탭에서 과일을 등록해 주세요.
+                    등록된 상품이 없습니다. &apos;상품·재고 관리&apos; 탭에서
+                    과일을 등록해 주세요.
                   </td>
                 </tr>
               ) : (
@@ -414,7 +454,7 @@ export function AdminDashboardTab({
                             void onPatchProduct(
                               agg.product_id,
                               { is_received: !agg.is_received },
-                              `📦 '${agg.product_name}' 입고 상태가 변경되었습니다.`
+                              `📦 '${agg.product_name}' 입고 상태가 변경되었습니다.`,
                             )
                           }
                           className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
@@ -438,7 +478,7 @@ export function AdminDashboardTab({
                                 },
                                 isSoldOut
                                   ? `🔄 '${agg.product_name}' 재고(${refillQty}개)가 복구되었습니다.`
-                                  : `🚫 '${agg.product_name}' 품절 처리되었습니다.`
+                                  : `🚫 '${agg.product_name}' 품절 처리되었습니다.`,
                               )
                             }
                             className={`px-2.5 py-1 rounded-lg font-bold text-[11px] ${

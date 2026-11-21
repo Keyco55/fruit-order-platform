@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import Link from "next/link";
 import { copyTextSafe } from "@/lib/clipboard";
 import { formatKRW, formatOrderClipboardText } from "@/lib/formatters";
@@ -10,13 +16,17 @@ const NICK_STORAGE_KEY = "customer_nickname_yucheon";
 const PHONE_STORAGE_KEY = "customer_phone_yucheon";
 
 export default function CustomerOrdersLookupPage() {
-  const [settings, setSettings] = useState<Omit<StoreSettings, "admin_pin"> | null>(null);
+  const [settings, setSettings] = useState<Omit<
+    StoreSettings,
+    "admin_pin"
+  > | null>(null);
   const [nickInput, setNickInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
   const [searchedNick, setSearchedNick] = useState("");
   const [searchedPhone, setSearchedPhone] = useState("");
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
+  const lookupId = useRef(0);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"ACTIVE" | "ALL">("ACTIVE");
   const [toastText, setToastText] = useState<string | null>(null);
@@ -36,7 +46,9 @@ export default function CustomerOrdersLookupPage() {
       return;
     }
     if (!trimmedPhone) {
-      alert("주문 시 입력하신 연락처(휴대폰 번호 또는 뒷 4자리)를 입력해 주세요.");
+      alert(
+        "주문 시 입력하신 연락처(휴대폰 번호 또는 뒷 4자리)를 입력해 주세요.",
+      );
       return;
     }
 
@@ -45,6 +57,8 @@ export default function CustomerOrdersLookupPage() {
       localStorage.setItem(PHONE_STORAGE_KEY, trimmedPhone);
     }
 
+    const requestId = ++lookupId.current;
+    setOrders([]);
     setLoading(true);
     setLookupError(null);
     setSearchedNick(trimmedNick);
@@ -53,23 +67,27 @@ export default function CustomerOrdersLookupPage() {
     try {
       const res = await fetch(
         `/api/bootstrap?nickname=${encodeURIComponent(
-          trimmedNick
+          trimmedNick,
         )}&phone=${encodeURIComponent(trimmedPhone)}`,
-        { cache: "no-store" }
+        { cache: "no-store" },
       );
+      const data = await res.json().catch(() => ({}));
+      if (requestId !== lookupId.current) return;
       if (res.ok) {
-        const data = await res.json();
         setSettings(data.settings);
         setOrders(data.myOrders ?? []);
       } else {
         setOrders([]);
-        setLookupError("예약 내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        setLookupError(
+          "예약 내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        );
       }
     } catch {
+      if (requestId !== lookupId.current) return;
       setOrders([]);
       setLookupError("네트워크 오류로 예약 내역을 조회하지 못했습니다.");
     } finally {
-      setLoading(false);
+      if (requestId === lookupId.current) setLoading(false);
     }
   }, []);
 
@@ -103,7 +121,7 @@ export default function CustomerOrdersLookupPage() {
   const displayedOrders = useMemo(() => {
     if (activeTab === "ACTIVE") {
       return orders.filter(
-        (o) => o.status !== "CANCELED" && o.status !== "PICKED_UP"
+        (o) => o.status !== "CANCELED" && o.status !== "PICKED_UP",
       );
     }
     return orders;
@@ -138,6 +156,37 @@ export default function CustomerOrdersLookupPage() {
       </header>
 
       <main className="w-[95%] max-w-[800px] mx-auto my-4 px-2 space-y-4">
+        <div className="flex flex-wrap gap-2 text-xs">
+          <button
+            type="button"
+            className="rounded-xl bg-white border px-3 py-2 font-bold"
+            disabled={loading}
+            onClick={() => void fetchOrders(nickInput, phoneInput)}
+          >
+            예약 새로고침
+          </button>
+          <button
+            type="button"
+            className="rounded-xl bg-white border px-3 py-2"
+            onClick={() => {
+              lookupId.current++;
+              setLoading(false);
+              setOrders([]);
+              setNickInput("");
+              setPhoneInput("");
+              setSearchedNick("");
+              setSearchedPhone("");
+              setLookupError(null);
+              localStorage.removeItem(NICK_STORAGE_KEY);
+              localStorage.removeItem(PHONE_STORAGE_KEY);
+            }}
+          >
+            내 정보 지우기
+          </button>
+          <span className="text-[#8B95A1]">
+            공용 기기에서는 조회 후 내 정보를 지워 주세요.
+          </span>
+        </div>
         {/* 브랜드 로고 미니 배너 */}
         <section className="bg-white rounded-2xl border border-[#E5E8EB] p-4 flex items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-3 min-w-0">
@@ -151,7 +200,8 @@ export default function CustomerOrdersLookupPage() {
                 {settings?.store_name || "후르츠파머 유천점"} 내 예약 조회
               </div>
               <div className="text-xs text-[#8B95A1] truncate">
-                주문 시 입력한 닉네임과 연락처로 구매·예약 상세를 확인할 수 있습니다.
+                주문 시 입력한 닉네임과 연락처로 구매·예약 상세를 확인할 수
+                있습니다.
               </div>
             </div>
           </div>
@@ -181,14 +231,22 @@ export default function CustomerOrdersLookupPage() {
             }}
             className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2"
           >
+            <label htmlFor="orders-page-input-1" className="sr-only">
+              오픈카톡 닉네임
+            </label>
             <input
+              id="orders-page-input-1"
               type="text"
               value={nickInput}
               onChange={(e) => setNickInput(e.target.value)}
               placeholder="오픈카톡 닉네임"
               className="w-full min-w-0 p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm sm:text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
             />
+            <label htmlFor="orders-page-input-2" className="sr-only">
+              연락처 (010-0000-0000 또는 뒷4자리)
+            </label>
             <input
+              id="orders-page-input-2"
               type="tel"
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value)}
@@ -226,7 +284,7 @@ export default function CustomerOrdersLookupPage() {
                   {
                     orders.filter(
                       (o) =>
-                        o.status !== "CANCELED" && o.status !== "PICKED_UP"
+                        o.status !== "CANCELED" && o.status !== "PICKED_UP",
                     ).length
                   }
                   )
@@ -254,7 +312,9 @@ export default function CustomerOrdersLookupPage() {
           </div>
         ) : lookupError ? (
           <div className="bg-white rounded-2xl border border-rose-200 py-10 text-center space-y-3 px-4">
-            <div className="text-sm font-semibold text-[#F04452]">{lookupError}</div>
+            <div className="text-sm font-semibold text-[#F04452]">
+              {lookupError}
+            </div>
             <button
               type="button"
               onClick={() => void fetchOrders(searchedNick, searchedPhone)}
@@ -266,7 +326,8 @@ export default function CustomerOrdersLookupPage() {
         ) : !searchedNick ? (
           <div className="bg-white rounded-2xl border border-[#E5E8EB] py-12 text-center space-y-3 px-4">
             <div className="text-sm text-[#8B95A1]">
-              위 입력창에 주문 시 입력한 닉네임과 연락처를 입력하고 조회해 주세요.
+              위 입력창에 주문 시 입력한 닉네임과 연락처를 입력하고 조회해
+              주세요.
             </div>
             <Link
               href="/"
@@ -279,7 +340,8 @@ export default function CustomerOrdersLookupPage() {
           <div className="bg-white rounded-2xl border border-[#E5E8EB] py-12 text-center space-y-3 px-4">
             <div className="text-sm text-[#8B95A1]">
               &apos;{searchedNick}&apos;
-              {searchedPhone ? ` / '${searchedPhone}'` : ""} 조건으로 조회된 주문 내역이 없습니다.
+              {searchedPhone ? ` / '${searchedPhone}'` : ""} 조건으로 조회된
+              주문 내역이 없습니다.
             </div>
             <Link
               href="/"
@@ -330,7 +392,9 @@ export default function CustomerOrdersLookupPage() {
                   <button
                     type="button"
                     onClick={async () => {
-                      await copyTextSafe(formatOrderClipboardText(order));
+                      await copyTextSafe(
+                        `주문번호: ${order.id}\n${formatOrderClipboardText(order)}`,
+                      );
                       showToast("주문서 내용이 복사되었습니다!");
                     }}
                     className="px-2.5 py-1 rounded-lg bg-white border border-[#E5E8EB] text-[11px] font-bold text-[#191F28] hover:bg-slate-50"
@@ -339,6 +403,10 @@ export default function CustomerOrdersLookupPage() {
                   </button>
                 </div>
 
+                <div className="px-4 pt-3 text-xs text-[#8B95A1] break-all">
+                  주문번호: {order.id} ·{" "}
+                  {order.is_paid ? "입금 확인" : "입금 확인 전"}
+                </div>
                 <div className="divide-y divide-[#E5E8EB] px-4">
                   {order.items.map((item) => (
                     <div
@@ -398,6 +466,10 @@ export default function CustomerOrdersLookupPage() {
             )}
           </div>
         )}
+        <p className="text-xs text-[#8B95A1]">
+          픽업 준비와 입금 확인은 별도입니다. 변경·취소는 공구방에서 주문번호와
+          함께 매장에 문의해 주세요.
+        </p>
       </main>
 
       {toastText && (

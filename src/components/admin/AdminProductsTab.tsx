@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useRef, useEffect } from "react";
 import {
   Camera,
   Eye,
@@ -62,7 +62,8 @@ const QUICK_FRUIT_PRESETS = [
     origin: "경북 영천",
     brix: "15 Brix",
     badge_text: "과즙 폭발",
-    description: "향긋하고 부드러운 과육에 꿀당도를 자랑하는 백도 복숭아입니다.",
+    description:
+      "향긋하고 부드러운 과육에 꿀당도를 자랑하는 백도 복숭아입니다.",
     image:
       "https://images.unsplash.com/photo-1629828874514-c1e5103f2150?auto=format&fit=crop&w=900&q=80",
   },
@@ -77,11 +78,13 @@ interface AdminProductsTabProps {
   onPatchProduct: (
     productId: string,
     patch: Partial<Product>,
-    successMsg: string
-  ) => Promise<void>;
+    successMsg: string,
+    expectedVersion?: number,
+  ) => Promise<boolean>;
   onAdjustStock: (productId: string, delta: number) => Promise<void>;
   onDeleteProduct: (productId: string, name: string) => Promise<void>;
   showToast: (msg: string) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }
 
 export function AdminProductsTab({
@@ -94,6 +97,7 @@ export function AdminProductsTab({
   onAdjustStock,
   onDeleteProduct,
   showToast,
+  onDirtyChange,
 }: AdminProductsTabProps) {
   const [subView, setSubView] = useState<"LIST" | "CREATE">("LIST");
   const [productSearch, setProductSearch] = useState("");
@@ -104,6 +108,10 @@ export function AdminProductsTab({
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
 
   // 빠른 수정 상태
+  const [newProductDirty, setNewProductDirty] = useState(false);
+  const editBaseline = useRef<Product | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const savingEditRef = useRef(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<{
     name: string;
@@ -131,7 +139,7 @@ export function AdminProductsTab({
   const [prodBadge, setProdBadge] = useState("오늘 경매 1등품");
   const [prodDesc, setProdDesc] = useState("");
   const [prodImage, setProdImage] = useState(
-    "https://images.unsplash.com/photo-1464965911861-746a04b4bca6?auto=format&fit=crop&w=900&q=80"
+    "https://images.unsplash.com/photo-1464965911861-746a04b4bca6?auto=format&fit=crop&w=900&q=80",
   );
   const [prodIsLimited, setProdIsLimited] = useState(true);
   const [prodStock, setProdStock] = useState("30");
@@ -151,7 +159,7 @@ export function AdminProductsTab({
   }, [products, productFilter, productSearch]);
 
   const handleImageFileChange = async (
-    e: React.ChangeEvent<HTMLInputElement>
+    e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -178,6 +186,12 @@ export function AdminProductsTab({
   };
 
   const startInlineEdit = (product: Product) => {
+    if (
+      editingId &&
+      !confirm("현재 수정 내용을 버리고 다른 상품을 편집할까요?")
+    )
+      return;
+    editBaseline.current = { ...product };
     setEditingId(product.id);
     setEditDraft({
       name: product.name,
@@ -189,28 +203,57 @@ export function AdminProductsTab({
     });
   };
 
+  useEffect(() => {
+    onDirtyChange(!!editingId || newProductDirty);
+  }, [editingId, newProductDirty, onDirtyChange]);
   const saveInlineEdit = async (product: Product) => {
-    const nextPrice = Math.max(0, Number(editDraft.price) || 0);
-    const nextRemain = editDraft.is_limited
-      ? Math.max(0, Number(editDraft.remain_stock) || 0)
-      : 999;
-    const nextTotal = editDraft.is_limited
-      ? Math.max(nextRemain, Number(editDraft.total_stock) || nextRemain)
-      : 999;
-
-    await onPatchProduct(
-      product.id,
-      {
-        name: editDraft.name.trim() || product.name,
-        unit_label: editDraft.unit_label.trim() || product.unit_label,
-        price: nextPrice,
-        is_limited: editDraft.is_limited,
-        remain_stock: nextRemain,
-        total_stock: nextTotal,
-      },
-      `✅ '${editDraft.name.trim() || product.name}' 정보가 수정되었습니다.`
-    );
-    setEditingId(null);
+    if (savingEditRef.current) return;
+    const original = editBaseline.current;
+    if (!original) return;
+    const patch: Partial<Product> = {};
+    const next: Partial<Product> = {
+      name: editDraft.name.trim(),
+      unit_label: editDraft.unit_label.trim(),
+      price: Number(editDraft.price),
+      is_limited: editDraft.is_limited,
+      remain_stock: Number(editDraft.remain_stock),
+      total_stock: Number(editDraft.total_stock),
+    };
+    if (
+      !next.name ||
+      !next.unit_label ||
+      ![next.price, next.remain_stock, next.total_stock].every(
+        (v) => Number.isInteger(v) && v! >= 0,
+      ) ||
+      next.remain_stock! > next.total_stock!
+    ) {
+      showToast("상품명·단위와 0 이상의 정수 가격·재고를 확인해 주세요.");
+      return;
+    }
+    for (const key of Object.keys(next) as Array<keyof Product>) {
+      if (next[key] !== original[key])
+        Object.assign(patch, { [key]: next[key] });
+    }
+    if (!Object.keys(patch).length) {
+      setEditingId(null);
+      return;
+    }
+    savingEditRef.current = true;
+    setIsSavingEdit(true);
+    try {
+      const ok = await onPatchProduct(
+        product.id,
+        patch,
+        "상품 정보를 수정했습니다.",
+        original.stock_version ?? 0,
+      );
+      if (ok) setEditingId(null);
+    } catch {
+      showToast("저장하지 못했습니다. 편집값은 보존됩니다.");
+    } finally {
+      savingEditRef.current = false;
+      setIsSavingEdit(false);
+    }
   };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
@@ -259,6 +302,7 @@ export function AdminProductsTab({
       });
 
       if (ok) {
+        setNewProductDirty(false);
         setProdName("");
         setProdDesc("");
         setSubView("LIST");
@@ -334,7 +378,14 @@ export function AdminProductsTab({
           <section className="bg-white rounded-3xl p-4 shadow-xs border border-slate-100 space-y-2.5">
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <label
+                htmlFor="admin-AdminProductsTab-input-1"
+                className="sr-only"
+              >
+                상품명 또는 초성 검색 (예: ㄸㄱ, 샤인)
+              </label>
               <input
+                id="admin-AdminProductsTab-input-1"
                 type="text"
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
@@ -352,9 +403,7 @@ export function AdminProductsTab({
                   key={tab.id}
                   type="button"
                   onClick={() =>
-                    setProductFilter(
-                      tab.id as "ALL" | "SOLDOUT" | "HIDDEN"
-                    )
+                    setProductFilter(tab.id as "ALL" | "SOLDOUT" | "HIDDEN")
                   }
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition ${
                     productFilter === tab.id
@@ -379,7 +428,10 @@ export function AdminProductsTab({
                 const isSoldOut = p.is_limited && p.remain_stock <= 0;
                 const stockPct =
                   p.is_limited && p.total_stock > 0
-                    ? Math.min(100, Math.round((p.remain_stock / p.total_stock) * 100))
+                    ? Math.min(
+                        100,
+                        Math.round((p.remain_stock / p.total_stock) * 100),
+                      )
                     : 100;
                 const isEditing = editingId === p.id;
 
@@ -441,7 +493,7 @@ export function AdminProductsTab({
                               { is_visible: !p.is_visible },
                               p.is_visible
                                 ? "손님 화면에서 숨김 처리되었습니다."
-                                : "손님 화면에 다시 노출됩니다."
+                                : "손님 화면에 다시 노출됩니다.",
                             )
                           }
                           className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -468,16 +520,33 @@ export function AdminProductsTab({
                     {isEditing && (
                       <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <label
+                            htmlFor="admin-AdminProductsTab-input-2"
+                            className="sr-only"
+                          >
+                            상품명
+                          </label>
                           <input
+                            id="admin-AdminProductsTab-input-2"
                             type="text"
                             value={editDraft.name}
                             onChange={(e) =>
-                              setEditDraft({ ...editDraft, name: e.target.value })
+                              setEditDraft({
+                                ...editDraft,
+                                name: e.target.value,
+                              })
                             }
                             placeholder="상품명"
                             className="sm:col-span-2 px-3 py-2 rounded-xl bg-white border border-slate-200 font-bold"
                           />
+                          <label
+                            htmlFor="admin-AdminProductsTab-input-3"
+                            className="sr-only"
+                          >
+                            단위 (예: 1팩)
+                          </label>
                           <input
+                            id="admin-AdminProductsTab-input-3"
                             type="text"
                             value={editDraft.unit_label}
                             onChange={(e) =>
@@ -492,14 +561,21 @@ export function AdminProductsTab({
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-center">
                           <div>
-                            <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                            <label
+                              htmlFor="product-field-1"
+                              className="block text-[11px] font-bold text-slate-500 mb-0.5"
+                            >
                               판매가격(원)
                             </label>
                             <input
+                              id="product-field-1"
                               type="number"
                               value={editDraft.price}
                               onChange={(e) =>
-                                setEditDraft({ ...editDraft, price: e.target.value })
+                                setEditDraft({
+                                  ...editDraft,
+                                  price: e.target.value,
+                                })
                               }
                               className="w-full px-3 py-1.5 rounded-xl bg-white border border-slate-200 font-extrabold"
                             />
@@ -520,10 +596,14 @@ export function AdminProductsTab({
                           {editDraft.is_limited && (
                             <>
                               <div>
-                                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                                <label
+                                  htmlFor="edit-remain-stock"
+                                  className="block text-[11px] font-bold text-slate-500 mb-0.5"
+                                >
                                   남은 재고
                                 </label>
                                 <input
+                                  id="edit-remain-stock"
                                   type="number"
                                   value={editDraft.remain_stock}
                                   onChange={(e) =>
@@ -536,10 +616,14 @@ export function AdminProductsTab({
                                 />
                               </div>
                               <div>
-                                <label className="block text-[11px] font-bold text-slate-500 mb-0.5">
+                                <label
+                                  htmlFor="product-field-2"
+                                  className="block text-[11px] font-bold text-slate-500 mb-0.5"
+                                >
                                   총 수량
                                 </label>
                                 <input
+                                  id="product-field-2"
                                   type="number"
                                   value={editDraft.total_stock}
                                   onChange={(e) =>
@@ -564,6 +648,7 @@ export function AdminProductsTab({
                           </button>
                           <button
                             type="button"
+                            disabled={isSavingEdit}
                             onClick={() => void saveInlineEdit(p)}
                             className="px-3.5 py-1.5 rounded-xl bg-emerald-600 text-white font-extrabold"
                           >
@@ -601,8 +686,8 @@ export function AdminProductsTab({
                                 isSoldOut
                                   ? "bg-rose-500"
                                   : stockPct <= 25
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
+                                    ? "bg-amber-500"
+                                    : "bg-emerald-500"
                               }`}
                               style={{ width: `${stockPct}%` }}
                             />
@@ -616,7 +701,9 @@ export function AdminProductsTab({
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, -5)}
-                              disabled={p.remain_stock <= 0 || busyProductId === p.id}
+                              disabled={
+                                p.remain_stock <= 0 || busyProductId === p.id
+                              }
                               className="px-2 py-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-700"
                             >
                               -5
@@ -624,7 +711,9 @@ export function AdminProductsTab({
                             <button
                               type="button"
                               onClick={() => void handleAdjustStock(p, -1)}
-                              disabled={p.remain_stock <= 0 || busyProductId === p.id}
+                              disabled={
+                                p.remain_stock <= 0 || busyProductId === p.id
+                              }
                               aria-label="재고 1 감소"
                               className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-700"
                             >
@@ -656,7 +745,7 @@ export function AdminProductsTab({
                             void onPatchProduct(
                               p.id,
                               { is_received: !p.is_received },
-                              "입고 상태가 변경되었습니다."
+                              "입고 상태가 변경되었습니다.",
                             )
                           }
                           className={`px-2.5 py-1.5 rounded-xl text-xs font-bold ${
@@ -681,7 +770,7 @@ export function AdminProductsTab({
                                 },
                                 isSoldOut
                                   ? `재고(${refillQty}개)가 복구되었습니다.`
-                                  : "품절 처리되었습니다."
+                                  : "품절 처리되었습니다.",
                               );
                             }}
                             className={`px-2.5 py-1.5 rounded-xl text-xs font-bold ${
@@ -709,8 +798,8 @@ export function AdminProductsTab({
               🍓 오늘의 과일 30초 간편 등록
             </h3>
             <p className="text-xs text-slate-500">
-              자주 파는 과일 버튼을 누르면 정보가 자동 입력되어 가격과 수량만 바꾸면
-              끝납니다.
+              자주 파는 과일 버튼을 누르면 정보가 자동 입력되어 가격과 수량만
+              바꾸면 끝납니다.
             </p>
           </div>
 
@@ -735,7 +824,7 @@ export function AdminProductsTab({
                     setProdDesc(preset.description);
                     setProdImage(preset.image);
                     showToast(
-                      `✨ '${preset.name}' 정보를 불러왔습니다. 수량/가격만 확인 후 등록하세요!`
+                      `✨ '${preset.name}' 정보를 불러왔습니다. 수량/가격만 확인 후 등록하세요!`,
                     );
                   }}
                   className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 text-xs font-bold hover:bg-emerald-100 transition"
@@ -746,12 +835,20 @@ export function AdminProductsTab({
             </div>
           </div>
 
-          <form onSubmit={handleCreateSubmit} className="space-y-3 pt-2">
+          <form
+            onChangeCapture={() => setNewProductDirty(true)}
+            onSubmit={handleCreateSubmit}
+            className="space-y-3 pt-2"
+          >
             <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">
+              <label
+                htmlFor="product-field-3"
+                className="block text-xs font-bold text-slate-600 mb-1"
+              >
                 과일 상품명 * (매장 픽업 전용)
               </label>
               <input
+                id="product-field-3"
                 type="text"
                 required
                 value={prodName}
@@ -763,10 +860,14 @@ export function AdminProductsTab({
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">
+                <label
+                  htmlFor="product-field-4"
+                  className="block text-xs font-bold text-slate-600 mb-1"
+                >
                   판매 단위
                 </label>
                 <input
+                  id="product-field-4"
                   type="text"
                   value={prodUnit}
                   onChange={(e) => setProdUnit(e.target.value)}
@@ -775,10 +876,14 @@ export function AdminProductsTab({
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">
+                <label
+                  htmlFor="product-field-5"
+                  className="block text-xs font-bold text-slate-600 mb-1"
+                >
                   판매 가격(원) *
                 </label>
                 <input
+                  id="product-field-5"
                   type="number"
                   required
                   value={prodPrice}
@@ -787,10 +892,14 @@ export function AdminProductsTab({
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">
+                <label
+                  htmlFor="product-field-6"
+                  className="block text-xs font-bold text-slate-600 mb-1"
+                >
                   할인전 원가(선택)
                 </label>
                 <input
+                  id="product-field-6"
                   type="number"
                   value={prodOriginalPrice}
                   onChange={(e) => setProdOriginalPrice(e.target.value)}
@@ -798,10 +907,14 @@ export function AdminProductsTab({
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">
+                <label
+                  htmlFor="product-field-7"
+                  className="block text-xs font-bold text-slate-600 mb-1"
+                >
                   당도 / 산지
                 </label>
                 <input
+                  id="product-field-7"
                   type="text"
                   value={prodBrix}
                   onChange={(e) => setProdBrix(e.target.value)}
@@ -876,7 +989,14 @@ export function AdminProductsTab({
             </div>
 
             <div>
+              <label
+                htmlFor="admin-AdminProductsTab-input-4"
+                className="sr-only"
+              >
+                사장님 한줄 설명 (예: 오늘 경매 1등품! 과즙이 끝내줍니다)
+              </label>
               <input
+                id="admin-AdminProductsTab-input-4"
                 type="text"
                 value={prodDesc}
                 onChange={(e) => setProdDesc(e.target.value)}

@@ -21,6 +21,8 @@ export interface StoreSettings {
   updated_at: string;
 }
 
+export type PublicStoreSettings = Omit<StoreSettings, "admin_pin">;
+
 export interface Product {
   id: string;
   sale_date: string; // YYYY-MM-DD
@@ -37,6 +39,7 @@ export interface Product {
   is_limited: boolean;
   total_stock: number;
   remain_stock: number;
+  stock_version?: number;
   is_received: boolean; // 매장 입고 완료 여부
   is_visible: boolean;
   sort_order: number;

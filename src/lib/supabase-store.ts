@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { orderFingerprint, validateOrderInput } from "@/lib/order-validation";
+import type { OrderQuery } from "@/lib/order-period";
 import { createInitialSeedData } from "@/lib/store";
 import {
   buildProductAggregations,
@@ -40,6 +42,7 @@ interface RawProductRow {
   is_limited: boolean;
   total_stock: number;
   remain_stock: number;
+  stock_version: number;
   is_received: boolean;
   is_visible: boolean;
   sort_order: number;
@@ -92,6 +95,7 @@ function mapProductRow(row: RawProductRow): Product {
     is_limited: row.is_limited,
     total_stock: row.total_stock,
     remain_stock: row.remain_stock,
+    stock_version: row.stock_version ?? 0,
     is_received: row.is_received,
     is_visible: row.is_visible,
     sort_order: row.sort_order,
@@ -130,10 +134,30 @@ function mapOrderRow(row: RawOrderRow): Order {
   };
 }
 
-function throwIfError(error: { message: string } | null, fallback: string): void {
+function throwIfError(
+  error: { message: string } | null,
+  fallback: string,
+): void {
   if (error) {
     throw new Error(error.message || fallback);
   }
+}
+
+export async function migrateAdminCredentialSupabase(
+  expected: string,
+  hashed: string,
+): Promise<StoreSettings> {
+  const current = await getStoreSettingsSupabase();
+  const { data, error } = await getSupabaseAdminClient()
+    .from("store_settings")
+    .update({ admin_pin: hashed, updated_at: new Date().toISOString() })
+    .eq("id", current.id)
+    .eq("admin_pin", expected)
+    .select("*")
+    .maybeSingle();
+  throwIfError(error, "인증 정보를 저장하지 못했습니다.");
+  if (!data) throw new Error("인증 정보가 변경됐습니다. 다시 로그인해 주세요.");
+  return data as StoreSettings;
 }
 
 export async function getStoreSettingsSupabase(): Promise<StoreSettings> {
@@ -165,7 +189,7 @@ export async function getStoreSettingsSupabase(): Promise<StoreSettings> {
 }
 
 export async function updateStoreSettingsSupabase(
-  patch: Partial<Omit<StoreSettings, "id" | "branch_code">>
+  patch: Partial<Omit<StoreSettings, "id" | "branch_code">>,
 ): Promise<StoreSettings> {
   const client = getSupabaseAdminClient();
   const current = await getStoreSettingsSupabase();
@@ -205,31 +229,65 @@ export async function getProductsSupabase(options?: {
   return ((data ?? []) as RawProductRow[]).map(mapProductRow);
 }
 
-export async function getOrdersSupabase(options?: {
-  nickname?: string;
-  phone?: string;
-  phoneLast4?: string;
-  includeCanceled?: boolean;
-}): Promise<Order[]> {
+export async function getOrdersSupabase(
+  options?: OrderQuery,
+): Promise<Order[]> {
   const client = getSupabaseAdminClient();
-
-  const [ordersRes, productsRes] = await Promise.all([
-    client
+  const raw: RawOrderRow[] = [];
+  let offset = 0;
+  while (true) {
+    let query = client
       .from("orders")
-      .select("*, order_items(*)")
-      .order("created_at", { ascending: false }),
-    client.from("products").select("id, is_received"),
-  ]);
-
-  throwIfError(ordersRes.error, "주문 내역을 불러오지 못했습니다.");
-  throwIfError(productsRes.error, "상품 입고 상태를 불러오지 못했습니다.");
-
-  const rawOrders = ((ordersRes.data ?? []) as RawOrderRow[]).map(mapOrderRow);
-  const products = (productsRes.data ?? []) as Array<
-    Pick<Product, "id" | "is_received">
-  >;
-
-  return enrichAndFilterOrders(rawOrders, products, options);
+      .select("*, order_items(*)", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+    if (options?.nickname !== undefined) {
+      const nick = options.nickname.trim().toLowerCase().replace(/\s+/g, "");
+      if (!nick) return [];
+      query = query.eq("nickname_lookup", nick);
+    }
+    const phone = options?.phone ?? options?.phoneLast4;
+    if (phone !== undefined) {
+      const digits = phone.replace(/\D/g, "");
+      if (!/^(?:\d{4}|\d{9,13})$/.test(digits)) return [];
+      query =
+        digits.length === 4
+          ? query.eq("customer_phone_last4", digits)
+          : query.or(
+              `phone_lookup.eq.${digits},and(phone_lookup.eq.,customer_phone_last4.eq.${digits.slice(-4)})`,
+            );
+    }
+    if (options?.includeCanceled === false)
+      query = query.neq("status", "CANCELED");
+    if (options?.fromDate) query = query.gte("order_date", options.fromDate);
+    if (options?.toDate) query = query.lte("order_date", options.toDate);
+    const { data, count, error } = await query.range(offset, offset + 499);
+    throwIfError(error, "주문 내역을 불러오지 못했습니다.");
+    const page = (data ?? []) as RawOrderRow[];
+    raw.push(...page);
+    offset += page.length;
+    if (!page.length || (count !== null && offset >= count)) break;
+  }
+  // 품목이 참조하는 상품만 조회해 상품 목록 자체의 반환 상한에도 영향을 받지 않는다.
+  const ids = [
+    ...new Set(
+      raw.flatMap((o) =>
+        (o.order_items ?? [])
+          .map((i) => i.product_id)
+          .filter((id): id is string => !!id),
+      ),
+    ),
+  ];
+  const products: Array<Pick<Product, "id" | "is_received">> = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const res = await client
+      .from("products")
+      .select("id, is_received")
+      .in("id", ids.slice(i, i + 200));
+    throwIfError(res.error, "상품 입고 상태를 불러오지 못했습니다.");
+    products.push(...(res.data ?? []));
+  }
+  return enrichAndFilterOrders(raw.map(mapOrderRow), products, options);
 }
 
 async function getOrderByIdSupabase(orderId: string): Promise<Order> {
@@ -250,7 +308,9 @@ async function getOrderByIdSupabase(orderId: string): Promise<Order> {
   const products = (productsRes.data ?? []) as Array<
     Pick<Product, "id" | "is_received">
   >;
-  return enrichAndFilterOrders([mapped], products, { includeCanceled: true })[0];
+  return enrichAndFilterOrders([mapped], products, {
+    includeCanceled: true,
+  })[0];
 }
 
 export async function getProductAggregationsSupabase(): Promise<
@@ -264,8 +324,10 @@ export async function getProductAggregationsSupabase(): Promise<
 }
 
 export async function createOrderSupabase(
-  input: CreateOrderInput
+  input: CreateOrderInput,
 ): Promise<Order> {
+  input = validateOrderInput(input);
+  const fingerprint = orderFingerprint(input);
   const nickname = (input.kakao_nickname ?? "").trim();
   if (!nickname) {
     throw new Error("오픈카톡 닉네임을 입력해 주세요.");
@@ -298,6 +360,7 @@ export async function createOrderSupabase(
     p_source: input.source ?? "WEB",
     p_items: validItems,
     p_idempotency_key: input.idempotency_key?.trim() || null,
+    p_request_fingerprint: fingerprint,
   });
 
   if (error || !orderId) {
@@ -314,7 +377,7 @@ export async function updateOrderAdminSupabase(
     is_paid?: boolean;
     memo?: string;
     pickup_time?: string;
-  }
+  },
 ): Promise<Order> {
   if (!isValidUuid(orderId)) {
     throw new Error("주문을 찾을 수 없습니다.");
@@ -337,7 +400,7 @@ export async function updateOrderAdminSupabase(
 }
 
 export async function createProductAdminSupabase(
-  input: CreateProductInput
+  input: CreateProductInput,
 ): Promise<Product> {
   const client = getSupabaseAdminClient();
   const idemKey = input.idempotency_key?.trim() || null;
@@ -369,7 +432,7 @@ export async function createProductAdminSupabase(
   const remainStock = input.is_limited
     ? Math.min(
         totalStock,
-        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock)))
+        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock))),
       )
     : 999;
 
@@ -423,7 +486,8 @@ export async function createProductAdminSupabase(
 
 export async function updateProductAdminSupabase(
   productId: string,
-  patch: Partial<Omit<Product, "id" | "created_at">>
+  patch: Partial<Omit<Product, "id" | "created_at">>,
+  expectedStockVersion?: number,
 ): Promise<Product> {
   if (!isValidUuid(productId)) {
     throw new Error("상품을 찾을 수 없습니다.");
@@ -434,59 +498,39 @@ export async function updateProductAdminSupabase(
   delete sanitizedPatch.id;
   delete sanitizedPatch.created_at;
 
-  if (
-    sanitizedPatch.remain_stock !== undefined ||
-    sanitizedPatch.total_stock !== undefined
-  ) {
-    const { data: currentRow, error: curErr } = await client
-      .from("products")
-      .select("is_limited, total_stock, remain_stock")
-      .eq("id", productId)
-      .maybeSingle();
-
-    throwIfError(curErr, "상품 재고 정보를 조회하지 못했습니다.");
-    if (!currentRow) {
-      throw new Error("상품을 찾을 수 없습니다.");
-    }
-
-    const nextLimited =
-      typeof sanitizedPatch.is_limited === "boolean"
-        ? sanitizedPatch.is_limited
-        : currentRow.is_limited;
-
-    if (nextLimited) {
-      const nextTotal =
-        sanitizedPatch.total_stock !== undefined
-          ? Math.max(0, Math.floor(Number(sanitizedPatch.total_stock) || 0))
-          : currentRow.total_stock;
-      const rawRemain =
-        sanitizedPatch.remain_stock !== undefined
-          ? Math.max(0, Math.floor(Number(sanitizedPatch.remain_stock) || 0))
-          : currentRow.remain_stock;
-
-      const resolvedTotal = Math.max(nextTotal, rawRemain);
-      sanitizedPatch.total_stock = resolvedTotal;
-      sanitizedPatch.remain_stock = Math.min(resolvedTotal, rawRemain);
-    }
+  delete sanitizedPatch.stock_version;
+  const stockChange = ["remain_stock", "total_stock", "is_limited"].some(
+    (k) => k in sanitizedPatch,
+  );
+  if (stockChange && !Number.isInteger(expectedStockVersion))
+    throw new Error("재고 수정에는 최신 버전이 필요합니다. 새로고침해 주세요.");
+  for (const key of ["remain_stock", "total_stock"]) {
+    if (
+      sanitizedPatch[key] !== undefined &&
+      (!Number.isInteger(sanitizedPatch[key]) ||
+        Number(sanitizedPatch[key]) < 0)
+    )
+      throw new Error("재고는 0 이상의 정수여야 합니다.");
   }
-
-  const { data, error } = await client
+  let query = client
     .from("products")
     .update(sanitizedPatch)
-    .eq("id", productId)
-    .select("*")
-    .maybeSingle();
+    .eq("id", productId);
+  if (stockChange) query = query.eq("stock_version", expectedStockVersion!);
+  const { data, error } = await query.select("*").maybeSingle();
 
   throwIfError(error, "상품 수정에 실패했습니다.");
   if (!data) {
-    throw new Error("상품을 찾을 수 없습니다.");
+    throw new Error(
+      "재고가 변경됐거나 상품이 없습니다. 최신 데이터를 확인한 뒤 다시 저장해 주세요.",
+    );
   }
   return mapProductRow(data as RawProductRow);
 }
 
 export async function adjustProductStockAdminSupabase(
   productId: string,
-  delta: number
+  delta: number,
 ): Promise<Product> {
   if (!isValidUuid(productId)) {
     throw new Error("상품을 찾을 수 없습니다.");
@@ -506,17 +550,14 @@ export async function adjustProductStockAdminSupabase(
 }
 
 export async function deleteProductAdminSupabase(
-  productId: string
+  productId: string,
 ): Promise<void> {
   if (!isValidUuid(productId)) {
     return;
   }
 
   const client = getSupabaseAdminClient();
-  const { error } = await client
-    .from("products")
-    .delete()
-    .eq("id", productId);
+  const { error } = await client.from("products").delete().eq("id", productId);
 
   throwIfError(error, "상품 삭제에 실패했습니다.");
 }
@@ -615,7 +656,7 @@ export async function resetDemoDatabaseSupabase(): Promise<{
     ({ seedOrderId, items: _items, ...row }) => {
       orderIdMap.set(seedOrderId, row.id);
       return row;
-    }
+    },
   );
 
   const { error: ordErr } = await client.from("orders").insert(ordersToInsert);
@@ -625,13 +666,15 @@ export async function resetDemoDatabaseSupabase(): Promise<{
     o.items.map((item) => ({
       id: crypto.randomUUID(),
       order_id: orderIdMap.get(o.seedOrderId)!,
-      product_id: item.product_id ? productIdMap.get(item.product_id) ?? null : null,
+      product_id: item.product_id
+        ? (productIdMap.get(item.product_id) ?? null)
+        : null,
       product_name: item.product_name,
       unit_label: item.unit_label,
       unit_price: item.unit_price,
       quantity: item.quantity,
       subtotal: item.subtotal,
-    }))
+    })),
   );
 
   const { error: itemErr } = await client
@@ -640,7 +683,7 @@ export async function resetDemoDatabaseSupabase(): Promise<{
   throwIfError(itemErr, "주문 품목 시드 삽입 실패");
 
   const mappedProducts = ((insertedProducts ?? []) as RawProductRow[]).map(
-    mapProductRow
+    mapProductRow,
   );
   const mappedOrders = await getOrdersSupabase({ includeCanceled: true });
 

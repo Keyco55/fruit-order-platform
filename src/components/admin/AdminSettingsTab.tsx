@@ -1,205 +1,253 @@
 "use client";
+import React, { useEffect, useRef, useState } from "react";
+import type { PublicStoreSettings } from "@/types/domain";
 
-import React, { useState } from "react";
-import { Eye, EyeOff, RefreshCw } from "lucide-react";
-import type { StoreSettings } from "@/types/domain";
-
-interface AdminSettingsTabProps {
-  settings: StoreSettings;
-  setSettings: React.Dispatch<React.SetStateAction<StoreSettings | null>>;
+interface Props {
+  settings: PublicStoreSettings;
+  onSaved: (settings: PublicStoreSettings) => void;
+  onDirtyChange: (dirty: boolean) => void;
+  onPasswordChanged: () => void;
   isRefreshing: boolean;
   lastUpdatedAt: string | null;
   onRefresh: () => void;
-  onSaveSettings: (e: React.FormEvent) => Promise<void>;
 }
+const fields = [
+  ["store_name", "가게 상호명"],
+  ["subtitle", "상단 서브 문구"],
+  ["kakao_openchat_url", "오픈카톡 공구방 주소"],
+  ["notice_text", "매장 공지사항"],
+  ["pickup_guide", "영업시간 / 픽업 안내"],
+  ["bank_account", "입금 계좌 안내"],
+] as const;
 
 export function AdminSettingsTab({
   settings,
-  setSettings,
+  onSaved,
+  onDirtyChange,
+  onPasswordChanged,
   isRefreshing,
   lastUpdatedAt,
   onRefresh,
-  onSaveSettings,
-}: AdminSettingsTabProps) {
-  const [showAdminPin, setShowAdminPin] = useState(false);
-
+}: Props) {
+  const [draft, setDraft] = useState(settings);
+  const baseline = useRef(settings);
+  const dirtyRef = useRef(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const dirty =
+    fields.some(([key]) => draft[key] !== baseline.current[key]) ||
+    !!(current || next || confirmation);
+  dirtyRef.current = dirty;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (!dirtyRef.current) {
+      baseline.current = settings;
+      setDraft(settings);
+    }
+  }, [settings]);
+  const submit = async (event: React.FormEvent, password: boolean) => {
+    event.preventDefault();
+    if (savingRef.current) return;
+    if (
+      password &&
+      fields.some(([key]) => draft[key] !== baseline.current[key]) &&
+      !confirm(
+        "매장 정보의 미저장 변경이 있습니다. 비밀번호 변경 후 로그아웃하면 해당 변경은 저장되지 않습니다. 계속할까요?",
+      )
+    )
+      return;
+    if (password && next !== confirmation) {
+      setMessage("새 비밀번호 확인이 일치하지 않습니다.");
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    setMessage("");
+    try {
+      const patch = Object.fromEntries(
+        fields
+          .filter(([key]) => draft[key] !== baseline.current[key])
+          .map(([key]) => [key, draft[key]]),
+      );
+      const res = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          password
+            ? {
+                action: "change_password",
+                current_password: current,
+                new_password: next,
+              }
+            : patch,
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "저장에 실패했습니다.");
+      if (password) {
+        setCurrent("");
+        setNext("");
+        setConfirmation("");
+        onDirtyChange(false);
+        onPasswordChanged();
+      } else {
+        baseline.current = data.settings;
+        setDraft(data.settings);
+        onSaved(data.settings);
+        setMessage("매장 설정을 저장했습니다.");
+      }
+    } catch (err) {
+      setMessage(
+        err instanceof Error
+          ? err.message
+          : "네트워크 오류입니다. 입력은 보존됩니다.",
+      );
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-        <div>
-          <h2 className="text-base font-extrabold text-slate-900">
-            ⚙️ 매장 · 오픈카톡방 설정
-          </h2>
-          <p className="text-xs text-slate-500">
-            가게 상호명, 오픈카톡 링크, 계좌번호 및 관리자 비밀번호를 관리합니다.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {lastUpdatedAt && (
-            <span className="text-[11px] font-medium text-slate-400">
-              갱신 {lastUpdatedAt}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 shadow-2xs transition"
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 ${
-                isRefreshing ? "animate-spin text-emerald-600" : ""
-              }`}
-            />
-            <span>{isRefreshing ? "새로고침 중..." : "설정 새로고침"}</span>
-          </button>
-        </div>
+      <div className="flex flex-wrap gap-2 items-center justify-between">
+        <h2 className="font-extrabold">매장 설정</h2>
+        <button
+          type="button"
+          className="rounded-xl border bg-white px-3 py-2 text-xs"
+          disabled={saving || isRefreshing}
+          onClick={() => {
+            if (dirty && !confirm("미저장 변경을 버리고 새로고침할까요?"))
+              return;
+            baseline.current = settings;
+            setDraft(settings);
+            setCurrent("");
+            setNext("");
+            setConfirmation("");
+            setMessage("");
+            dirtyRef.current = false;
+            onDirtyChange(false);
+            onRefresh();
+          }}
+        >
+          설정 새로고침
+        </button>
+        <span className="text-xs text-slate-500">
+          갱신 {lastUpdatedAt || "-"}
+          {dirty ? " · 미저장 변경 있음" : ""}
+        </span>
       </div>
-
-      <section className="bg-white rounded-3xl p-5 shadow-xs border border-slate-100 space-y-4">
-        <form onSubmit={onSaveSettings} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                가게 상호명
-              </label>
-              <input
-                type="text"
-                value={settings.store_name}
-                onChange={(e) =>
-                  setSettings({ ...settings, store_name: e.target.value })
-                }
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm font-bold"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                상단 서브 배지 문구
-              </label>
-              <input
-                type="text"
-                value={settings.subtitle}
-                onChange={(e) =>
-                  setSettings({ ...settings, subtitle: e.target.value })
-                }
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm"
-              />
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
-            <label className="block text-xs font-extrabold text-amber-950">
-              💬 오픈카톡 단톡방 링크 (테스트 / 실제 공구방 연결 주소)
+      {message && (
+        <p
+          role="status"
+          className="rounded-xl bg-blue-50 p-3 text-sm whitespace-pre-wrap"
+        >
+          {message}
+        </p>
+      )}
+      <form
+        onSubmit={(e) => void submit(e, false)}
+        className="rounded-2xl bg-white border p-4 space-y-4"
+      >
+        <h3 className="font-bold">매장 정보 · 고객 안내</h3>
+        {fields.map(([key, title]) => (
+          <div key={key}>
+            <label
+              htmlFor={`settings-${key}`}
+              className="block text-xs font-bold mb-1"
+            >
+              {title}
             </label>
-            <div className="flex gap-2">
-              <input
-                type="url"
-                value={settings.kakao_openchat_url}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    kakao_openchat_url: e.target.value,
-                  })
-                }
-                placeholder="https://open.kakao.com/o/..."
-                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-white border border-amber-200 text-sm font-mono"
+            {key === "notice_text" ? (
+              <textarea
+                id={`settings-${key}`}
+                value={draft[key]}
+                maxLength={1000}
+                rows={3}
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                className="w-full rounded-xl bg-slate-100 p-3 text-sm"
               />
-              {settings.kakao_openchat_url && (
-                <a
-                  href={settings.kakao_openchat_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3.5 py-2.5 rounded-xl bg-[#FEE500] text-[#191919] text-xs font-extrabold flex items-center shrink-0 hover:brightness-95"
-                >
-                  테스트 열기
-                </a>
-              )}
-            </div>
-            <p className="text-[11px] text-amber-800">
-              입력 후 아래 [설정 저장하기]를 누르면 손님 페이지 [공구방으로 이동]에 즉시
-              적용됩니다.
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              매장 공지사항 배너
-            </label>
-            <textarea
-              rows={2}
-              value={settings.notice_text}
-              onChange={(e) =>
-                setSettings({ ...settings, notice_text: e.target.value })
-              }
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                영업시간 / 픽업 안내
-              </label>
+            ) : (
               <input
-                type="text"
-                value={settings.pickup_guide}
-                onChange={(e) =>
-                  setSettings({ ...settings, pickup_guide: e.target.value })
-                }
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm"
+                id={`settings-${key}`}
+                type={key === "kakao_openchat_url" ? "url" : "text"}
+                maxLength={1000}
+                value={draft[key]}
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                className="w-full rounded-xl bg-slate-100 p-3 text-sm"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                계좌번호 안내
-              </label>
-              <input
-                type="text"
-                value={settings.bank_account}
-                onChange={(e) =>
-                  setSettings({ ...settings, bank_account: e.target.value })
-                }
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-sm"
-              />
-            </div>
+            )}
           </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              사장님 관리자 비밀번호
-            </label>
-            <div className="relative w-56">
-              <input
-                type={showAdminPin ? "text" : "password"}
-                value={settings.admin_pin}
-                onChange={(e) =>
-                  setSettings({ ...settings, admin_pin: e.target.value })
-                }
-                className="w-full px-3.5 pr-10 py-2.5 rounded-xl bg-slate-100 text-sm font-bold"
-              />
-              <button
-                type="button"
-                onClick={() => setShowAdminPin((prev) => !prev)}
-                aria-label={showAdminPin ? "비밀번호 숨기기" : "비밀번호 보기"}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
-              >
-                {showAdminPin ? (
-                  <EyeOff className="w-4 h-4" />
-                ) : (
-                  <Eye className="w-4 h-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            className="w-full py-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-sm transition"
-          >
-            설정 저장하기
-          </button>
-        </form>
-      </section>
+        ))}
+        <button
+          disabled={saving}
+          className="w-full rounded-xl bg-emerald-600 text-white py-3 font-bold disabled:opacity-50"
+        >
+          {saving ? "저장 중…" : "매장 설정 저장"}
+        </button>
+      </form>
+      <form
+        onSubmit={(e) => void submit(e, true)}
+        className="rounded-2xl bg-white border p-4 space-y-3"
+      >
+        <h3 className="font-bold">관리자 비밀번호 변경</h3>
+        <p className="text-xs text-slate-500">
+          새 비밀번호는 12~128자입니다. 변경하면 모든 기존 관리자 세션이
+          만료되어 다시 로그인해야 합니다.
+        </p>
+        <label htmlFor="password-current" className="block text-xs font-bold">
+          현재 비밀번호
+        </label>
+        <input
+          id="password-current"
+          type="password"
+          autoComplete="current-password"
+          required
+          maxLength={256}
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          className="w-full rounded-xl bg-slate-100 p-3"
+        />
+        <label htmlFor="password-next" className="block text-xs font-bold">
+          새 비밀번호
+        </label>
+        <input
+          id="password-next"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={12}
+          maxLength={128}
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+          className="w-full rounded-xl bg-slate-100 p-3"
+        />
+        <label htmlFor="password-confirm" className="block text-xs font-bold">
+          새 비밀번호 확인
+        </label>
+        <input
+          id="password-confirm"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={12}
+          maxLength={128}
+          value={confirmation}
+          onChange={(e) => setConfirmation(e.target.value)}
+          className="w-full rounded-xl bg-slate-100 p-3"
+        />
+        <button
+          disabled={saving}
+          className="w-full rounded-xl bg-slate-900 text-white py-3 font-bold disabled:opacity-50"
+        >
+          {saving ? "변경 중…" : "비밀번호 변경 후 로그아웃"}
+        </button>
+      </form>
     </div>
   );
 }

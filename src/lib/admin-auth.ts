@@ -1,107 +1,119 @@
 import crypto from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
+import { getStoreSettings } from "@/lib/repository";
 
 export const ADMIN_SESSION_COOKIE_NAME = "fruit_admin_session";
-const SESSION_TTL_SECONDS = 60 * 60 * 12; // 12시간
-
+const SESSION_TTL_SECONDS = 60 * 60 * 12;
 interface SessionPayload {
   role: "admin";
   exp: number;
+  version: string;
 }
 
 function getSigningSecret(): string {
-  return (
-    process.env.ADMIN_SESSION_SECRET?.trim() ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
-    process.env.KAKAO_WEBHOOK_SECRET?.trim() ||
-    "fruit-order-platform-local-session-secret"
-  );
+  const secret = process.env.ADMIN_SESSION_SECRET?.trim();
+  if (!secret || Buffer.byteLength(secret) < 32)
+    throw new Error("ADMIN_SESSION_SECRET을 32바이트 이상으로 설정해 주세요.");
+  return secret;
 }
-
-function signPayload(encodedPayload: string): string {
+function signPayload(value: string): string {
   return crypto
     .createHmac("sha256", getSigningSecret())
-    .update(encodedPayload)
+    .update(value)
     .digest("base64url");
 }
-
+export function credentialVersion(credential: string): string {
+  return crypto.createHash("sha256").update(credential).digest("hex");
+}
 export function createAdminSessionToken(
-  nowSeconds = Math.floor(Date.now() / 1000)
+  nowSeconds = Math.floor(Date.now() / 1000),
+  credential = "",
 ): string {
   const payload: SessionPayload = {
     role: "admin",
     exp: nowSeconds + SESSION_TTL_SECONDS,
+    version: credentialVersion(credential),
   };
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
-    "base64url"
-  );
-  const signature = signPayload(encodedPayload);
-  return `${encodedPayload}.${signature}`;
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${encoded}.${signPayload(encoded)}`;
 }
-
 export function verifyAdminSessionToken(
   token?: string | null,
-  nowSeconds = Math.floor(Date.now() / 1000)
+  nowSeconds = Math.floor(Date.now() / 1000),
+  credential = "",
 ): boolean {
-  if (!token) return false;
-  const parts = token.split(".");
-  if (parts.length !== 2) return false;
-
-  const [encodedPayload, signature] = parts;
-  if (!encodedPayload || !signature) return false;
-
-  const expectedSig = signPayload(encodedPayload);
-  const sigBuf = Buffer.from(signature);
-  const expectedBuf = Buffer.from(expectedSig);
-  if (sigBuf.length !== expectedBuf.length) return false;
-  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return false;
-
+  if (!token || token.length > 2048) return false;
   try {
-    const decoded = JSON.parse(
-      Buffer.from(encodedPayload, "base64url").toString("utf-8")
-    ) as Partial<SessionPayload>;
+    const [encoded, sig, extra] = token.split(".");
+    if (!encoded || !sig || extra !== undefined) return false;
+    const actual = Buffer.from(sig);
+    const expected = Buffer.from(signPayload(encoded));
+    if (
+      actual.length !== expected.length ||
+      !crypto.timingSafeEqual(actual, expected)
+    )
+      return false;
+    const p = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8"),
+    ) as SessionPayload;
     return (
-      decoded.role === "admin" &&
-      typeof decoded.exp === "number" &&
-      decoded.exp > nowSeconds
+      p.role === "admin" &&
+      Number.isFinite(p.exp) &&
+      p.exp > nowSeconds &&
+      p.version === credentialVersion(credential)
     );
   } catch {
     return false;
   }
 }
-
-export function isAdminRequestAuthenticated(request: NextRequest): boolean {
+export async function isAdminRequestAuthenticated(
+  request: NextRequest,
+): Promise<boolean> {
   const token = request.cookies.get(ADMIN_SESSION_COOKIE_NAME)?.value;
-  return verifyAdminSessionToken(token);
+  if (!verifyAdminSessionTokenSignature(token)) return false;
+  const settings = await getStoreSettings();
+  return verifyAdminSessionToken(token, undefined, settings.admin_pin);
 }
-
-function isHttpsRequest(request: NextRequest): boolean {
-  const forwardedProto = request.headers.get("x-forwarded-proto");
-  if (forwardedProto) {
-    return forwardedProto.split(",")[0]?.trim() === "https";
+// Reject malformed/unsigned cookies before any DB access. Full credential-version validation follows.
+function verifyAdminSessionTokenSignature(token?: string): boolean {
+  if (!token || token.length > 2048) return false;
+  try {
+    const [encoded, sig, extra] = token.split(".");
+    if (!encoded || !sig || extra !== undefined) return false;
+    const expected = Buffer.from(signPayload(encoded)),
+      actual = Buffer.from(sig);
+    return (
+      actual.length === expected.length &&
+      crypto.timingSafeEqual(actual, expected)
+    );
+  } catch {
+    return false;
   }
-  return request.nextUrl.protocol === "https:";
 }
-
+function isHttps(request: NextRequest): boolean {
+  return (
+    request.nextUrl.protocol === "https:" ||
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() === "https"
+  );
+}
 export function setAdminSessionCookie(
   request: NextRequest,
-  response: NextResponse
+  response: NextResponse,
+  credential: string,
 ): void {
-  const token = createAdminSessionToken();
   response.cookies.set({
     name: ADMIN_SESSION_COOKIE_NAME,
-    value: token,
+    value: createAdminSessionToken(undefined, credential),
     httpOnly: true,
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_TTL_SECONDS,
-    secure: isHttpsRequest(request),
+    secure: isHttps(request),
   });
 }
-
 export function clearAdminSessionCookie(
   request: NextRequest,
-  response: NextResponse
+  response: NextResponse,
 ): void {
   response.cookies.set({
     name: ADMIN_SESSION_COOKIE_NAME,
@@ -110,6 +122,6 @@ export function clearAdminSessionCookie(
     sameSite: "lax",
     path: "/",
     maxAge: 0,
-    secure: isHttpsRequest(request),
+    secure: isHttps(request),
   });
 }
