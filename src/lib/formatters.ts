@@ -70,7 +70,8 @@ export function formatOrderClipboardText(order: Order): string {
   const lines: string[] = [
     `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix} | ${fulfillmentLabel}`,
     ...order.items.map(
-      (item) => `- ${item.product_name} (${item.unit_label}) x ${item.quantity}`
+      (item) =>
+        `- ${item.product_name} (${item.unit_label}) x ${item.quantity}`,
     ),
     `총 금액: ${formatKRW(order.total_amount)}`,
   ];
@@ -92,9 +93,9 @@ export function formatOrderClipboardText(order: Order): string {
  * 사장님이 오픈카톡 공지에 바로 붙여넣을 수 있는 오늘의 과일 홍보 문구 생성
  */
 export function formatKakaoNoticeText(
-  settings: StoreSettings,
+  settings: Omit<StoreSettings, "admin_pin">,
   products: Product[],
-  siteOrigin = "https://fruit-order-platform.vercel.app"
+  siteOrigin = "https://fruit-order-platform.vercel.app",
 ): string {
   const visibleProducts = products.filter((p) => p.is_visible);
   const pickupList = visibleProducts.filter((p) => p.category === "PICKUP");
@@ -105,8 +106,8 @@ export function formatKakaoNoticeText(
       p.is_limited && p.remain_stock <= 0
         ? " [품절]"
         : p.is_limited
-        ? ` [한정 ${p.remain_stock}개]`
-        : "";
+          ? ` [한정 ${p.remain_stock}개]`
+          : "";
     const brixTag = p.brix ? ` (${p.brix})` : "";
     return `• ${p.name}${brixTag} ${p.unit_label} : ${formatKRW(p.price)}${stockTag}`;
   };
@@ -167,7 +168,9 @@ export function ordersToCsv(orders: Order[]): string {
   };
 
   const escapeCsv = (val: string | number) => {
-    const str = String(val ?? "").replace(/"/g, '""');
+    const raw = String(val ?? "");
+    const safe = /^[\s\t\r]*[=+@-]/.test(raw) ? `\'${raw}` : raw;
+    const str = safe.replace(/"/g, '""');
     return `"${str}"`;
   };
 
@@ -208,48 +211,39 @@ export function ordersToCsv(orders: Order[]): string {
  */
 export function parseKakaoChatMessage(
   message: string,
-  products: Product[]
+  products: Product[],
 ): Array<{ product_id: string; quantity: number }> {
-  const lines = message
-    .split(/\r?\n|,|\/|\+/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
+  if (
+    /[?？]|취소|문의|달아요|인가요|있나요|얼마|환불|주문번호:|\[주문접수\]/.test(
+      message,
+    )
+  )
+    return [];
   const matchedMap = new Map<string, number>();
-  const activeProducts = products.filter((p) => p.is_visible);
-
-  for (const line of lines) {
-    if (line.startsWith("[주문접수]") || line.startsWith("총 금액") || line.startsWith("픽업예정") || line.startsWith("요청사항")) {
-      continue;
-    }
-
-    for (const product of activeProducts) {
-      // 상품명 핵심 키워드 매칭 (공백 제거 비교 및 단어 매칭)
-      const normalizedLine = line.replace(/\s+/g, "");
-      const normalizedName = product.name.replace(/\s+/g, "");
-      const keywords = product.name
-        .split(/\s+/)
-        .filter((w) => w.length >= 2);
-
-      const isMatched =
-        normalizedLine.includes(normalizedName) ||
-        keywords.some((kw) => normalizedLine.includes(kw));
-
-      if (isMatched) {
-        // 줄 끝쪽이나 'x 2', '2팩', '2박스', '2개', '2' 패턴에서 수량 추출
-        const qtyMatch =
-          line.match(/[xX*]\s*(\d+)/) ||
-          line.match(/(\d+)\s*(팩|박스|세트|개|봉|송이|통|망|다발|kg)?\s*$/) ||
-          line.match(/(\d+)/);
-
-        const quantity = qtyMatch ? Math.max(1, parseInt(qtyMatch[1], 10)) : 1;
-        matchedMap.set(product.id, (matchedMap.get(product.id) ?? 0) + quantity);
-        break;
-      }
-    }
+  for (const raw of message.split(/\r?\n|,/)) {
+    const line = raw.trim();
+    // 중량(kg/g), 음수, 소수, 상품명에 포함된 숫자를 수량으로 추정하지 않는다.
+    const qty = line.match(
+      /(?:[xX*]\s*([1-9]\d*)|([1-9]\d*)\s*(?:팩|박스|세트|개|봉|송이|통|망|다발))\s*(?:예약(?:합니다|이요)?|주문(?:합니다|이요)?|주세요|부탁해요)?[.!]?$/,
+    );
+    if (!qty) continue;
+    const prefix = line.slice(0, qty.index).trim().replace(/\s+/g, "");
+    if (!prefix || /[\d.\-]$/.test(prefix)) continue;
+    const quantity = Number(qty[1] ?? qty[2]);
+    if (!Number.isInteger(quantity) || quantity > 999) continue;
+    const candidates = products.filter(
+      (p) =>
+        p.is_visible &&
+        (p.name.replace(/\s+/g, "").includes(prefix) ||
+          prefix.includes(p.name.replace(/\s+/g, ""))),
+    );
+    if (candidates.length !== 1) continue;
+    const id = candidates[0].id;
+    const total = (matchedMap.get(id) ?? 0) + quantity;
+    if (total > 999) return [];
+    matchedMap.set(id, total);
   }
-
-  return Array.from(matchedMap.entries()).map(([product_id, quantity]) => ({
+  return [...matchedMap].map(([product_id, quantity]) => ({
     product_id,
     quantity,
   }));

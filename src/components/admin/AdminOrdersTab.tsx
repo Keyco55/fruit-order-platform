@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -28,7 +28,7 @@ interface AdminOrdersTabProps {
   onRefresh: () => void;
   onUpdateOrder: (
     orderId: string,
-    patch: { status?: OrderStatus; is_paid?: boolean }
+    patch: { status?: OrderStatus; is_paid?: boolean },
   ) => Promise<void>;
   botSender: string;
   setBotSender: (value: string) => void;
@@ -55,6 +55,8 @@ export function AdminOrdersTab({
   botReply,
   onSimulateKakaoBot,
 }: AdminOrdersTabProps) {
+  const [page, setPage] = useState(0);
+  useEffect(() => setPage(0), [orderSearch, orderFilter]);
   const [showBotTester, setShowBotTester] = useState(false);
 
   const filterCounts = useMemo(() => {
@@ -88,7 +90,7 @@ export function AdminOrdersTab({
           (searchDigits.length > 0 &&
             (o.customer_phone ?? "").replace(/\D/g, "").includes(searchDigits));
         const matchItem = o.items.some((i) =>
-          matchesKoreanSearch(i.product_name, orderSearch)
+          matchesKoreanSearch(i.product_name, orderSearch),
         );
         return matchNick || matchPhone || matchItem;
       }
@@ -117,7 +119,8 @@ export function AdminOrdersTab({
             👥 고객 주문 현황 ({filteredOrders.length}건)
           </h2>
           <p className="text-xs text-slate-500">
-            초성(예: ㄱㅇㅅㄹ)·전화번호 뒷4자리로 찾고 원터치로 결제·수령을 처리하세요.
+            초성(예: ㄱㅇㅅㄹ)·전화번호 뒷4자리로 찾고 원터치로 결제·수령을
+            처리하세요.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -146,7 +149,11 @@ export function AdminOrdersTab({
       <section className="bg-white rounded-3xl p-4 shadow-xs border border-slate-100 space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <label htmlFor="admin-AdminOrdersTab-input-1" className="sr-only">
+            닉네임/초성/전화뒷자리/과일명 검색 (예: ㄱㅇㅅㄹ, 1234)
+          </label>
           <input
+            id="admin-AdminOrdersTab-input-1"
             type="text"
             value={orderSearch}
             onChange={(e) => setOrderSearch(e.target.value)}
@@ -183,8 +190,8 @@ export function AdminOrdersTab({
                 orderFilter === tab.id
                   ? "bg-slate-900 text-white"
                   : tab.id === "UNPAID" && filterCounts.UNPAID > 0
-                  ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}
             >
               {tab.label}
@@ -193,6 +200,35 @@ export function AdminOrdersTab({
         </div>
       </section>
 
+      <nav
+        aria-label="주문 목록 페이지"
+        className="flex flex-wrap items-center justify-between text-xs gap-2"
+      >
+        <button
+          type="button"
+          disabled={page === 0}
+          className="rounded-xl border px-3 py-2 disabled:opacity-40"
+          onClick={() => setPage((p) => p - 1)}
+        >
+          이전 50건
+        </button>
+        <span>
+          총 {filteredOrders.length}건 ·{" "}
+          {Math.min(
+            page + 1,
+            Math.max(1, Math.ceil(filteredOrders.length / 50)),
+          )}{" "}
+          / {Math.max(1, Math.ceil(filteredOrders.length / 50))} 페이지
+        </span>
+        <button
+          type="button"
+          disabled={(page + 1) * 50 >= filteredOrders.length}
+          className="rounded-xl border px-3 py-2 disabled:opacity-40"
+          onClick={() => setPage((p) => p + 1)}
+        >
+          다음 50건
+        </button>
+      </nav>
       {/* 고객 주문 카드 리스트 */}
       <section className="space-y-3">
         {filteredOrders.length === 0 ? (
@@ -200,193 +236,210 @@ export function AdminOrdersTab({
             조건에 해당하는 주문 내역이 없습니다.
           </div>
         ) : (
-          filteredOrders.map((order) => {
-            const isCanceled = order.status === "CANCELED";
-            return (
-              <div
-                key={order.id}
-                className={`p-4 rounded-3xl border transition space-y-3 ${
-                  isCanceled
-                    ? "bg-slate-50 border-slate-200 opacity-65"
-                    : order.status === "PICKED_UP"
-                    ? "bg-slate-50/70 border-slate-200"
-                    : "bg-white border-slate-200 shadow-xs"
-                }`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-base font-black text-slate-900">
-                        {order.kakao_nickname}
-                      </span>
-                      {order.customer_phone ? (
-                        <a
-                          href={`tel:${order.customer_phone.replace(/\D/g, "")}`}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition"
+          filteredOrders
+            .slice(
+              Math.min(
+                page,
+                Math.max(0, Math.ceil(filteredOrders.length / 50) - 1),
+              ) * 50,
+              (Math.min(
+                page,
+                Math.max(0, Math.ceil(filteredOrders.length / 50) - 1),
+              ) +
+                1) *
+                50,
+            )
+            .map((order) => {
+              const isCanceled = order.status === "CANCELED";
+              return (
+                <div
+                  key={order.id}
+                  className={`p-4 rounded-3xl border transition space-y-3 ${
+                    isCanceled
+                      ? "bg-slate-50 border-slate-200 opacity-65"
+                      : order.status === "PICKED_UP"
+                        ? "bg-slate-50/70 border-slate-200"
+                        : "bg-white border-slate-200 shadow-xs"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-base font-black text-slate-900">
+                          {order.kakao_nickname}
+                        </span>
+                        {order.customer_phone ? (
+                          <a
+                            href={`tel:${order.customer_phone.replace(/\D/g, "")}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-700 transition"
+                          >
+                            📞 {order.customer_phone}
+                          </a>
+                        ) : (
+                          order.customer_phone_last4 && (
+                            <span className="text-xs font-bold text-slate-500">
+                              ({order.customer_phone_last4})
+                            </span>
+                          )
+                        )}
+                        <span className="text-[11px] font-medium text-slate-400">
+                          {order.order_date} {formatOrderTime(order.created_at)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-100 text-blue-800">
+                          🏬 매장 픽업
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
+                            order.is_paid
+                              ? "bg-blue-600 text-white"
+                              : "bg-rose-100 text-rose-700"
+                          }`}
                         >
-                          📞 {order.customer_phone}
-                        </a>
-                      ) : (
-                        order.customer_phone_last4 && (
-                          <span className="text-xs font-bold text-slate-500">
-                            ({order.customer_phone_last4})
+                          {order.is_paid ? "💳 결제완료" : "미결제"}
+                        </span>
+                        {order.status === "RESERVED" && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] font-bold">
+                            ⏳ 예약접수
                           </span>
-                        )
-                      )}
-                      <span className="text-[11px] font-medium text-slate-400">
-                        {order.order_date} {formatOrderTime(order.created_at)}
-                      </span>
+                        )}
+                        {order.status === "READY" && (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                            ✅ 입고·포장완료
+                          </span>
+                        )}
+                        {order.status === "PICKED_UP" && (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[11px] font-bold">
+                            🎁 수령완료
+                          </span>
+                        )}
+                        {order.status === "CANCELED" && (
+                          <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] font-bold">
+                            취소됨
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[11px] font-semibold">
+                          {order.source === "KAKAO_BOT"
+                            ? "🤖 카톡봇"
+                            : "📱 웹주문"}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-100 text-blue-800">
-                        🏬 매장 픽업
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
-                          order.is_paid
-                            ? "bg-blue-600 text-white"
-                            : "bg-rose-100 text-rose-700"
-                        }`}
+                    <span className="text-lg font-black text-emerald-700 shrink-0">
+                      {formatKRW(order.total_amount)}
+                    </span>
+                  </div>
+
+                  {/* 품목 내역 */}
+                  <div className="bg-slate-50 rounded-2xl p-3 space-y-1.5 text-xs">
+                    {order.items.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between font-medium text-slate-800"
                       >
-                        {order.is_paid ? "💳 결제완료" : "미결제"}
-                      </span>
-                      {order.status === "RESERVED" && (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] font-bold">
-                          ⏳ 예약접수
+                        <span>
+                          • {item.product_name} ({item.unit_label}){" "}
+                          <strong className="text-emerald-700 font-extrabold">
+                            x {item.quantity}개
+                          </strong>
+                        </span>
+                        <span className="text-slate-600 font-semibold">
+                          {formatKRW(item.subtotal)}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="pt-1.5 mt-1 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span>⏰ 픽업예정: {order.pickup_time || "미지정"}</span>
+                      {order.memo && (
+                        <span className="text-amber-800 font-semibold">
+                          📝 메모: {order.memo}
                         </span>
                       )}
-                      {order.status === "READY" && (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[11px] font-bold">
-                          ✅ 입고·포장완료
-                        </span>
-                      )}
-                      {order.status === "PICKED_UP" && (
-                        <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[11px] font-bold">
-                          🎁 수령완료
-                        </span>
-                      )}
-                      {order.status === "CANCELED" && (
-                        <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] font-bold">
-                          취소됨
-                        </span>
-                      )}
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[11px] font-semibold">
-                        {order.source === "KAKAO_BOT" ? "🤖 카톡봇" : "📱 웹주문"}
-                      </span>
                     </div>
                   </div>
 
-                  <span className="text-lg font-black text-emerald-700 shrink-0">
-                    {formatKRW(order.total_amount)}
-                  </span>
-                </div>
-
-                {/* 품목 내역 */}
-                <div className="bg-slate-50 rounded-2xl p-3 space-y-1.5 text-xs">
-                  {order.items.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between font-medium text-slate-800"
+                  {/* 원터치 상태 처리 버튼 */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onUpdateOrder(order.id, {
+                          is_paid: !order.is_paid,
+                        })
+                      }
+                      className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                        order.is_paid
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      }`}
                     >
+                      <CreditCard className="w-3.5 h-3.5" />
                       <span>
-                        • {item.product_name} ({item.unit_label}){" "}
-                        <strong className="text-emerald-700 font-extrabold">
-                          x {item.quantity}개
-                        </strong>
+                        {order.is_paid ? "결제확인 완료" : "결제확인 체크"}
                       </span>
-                      <span className="text-slate-600 font-semibold">
-                        {formatKRW(item.subtotal)}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="pt-1.5 mt-1 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span>
-                      ⏰ 픽업예정: {order.pickup_time || "미지정"}
-                    </span>
-                    {order.memo && (
-                      <span className="text-amber-800 font-semibold">
-                        📝 메모: {order.memo}
-                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onUpdateOrder(order.id, { status: "READY" })
+                      }
+                      disabled={order.status === "READY" || isCanceled}
+                      className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                        order.status === "READY"
+                          ? "bg-emerald-600 text-white"
+                          : "bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+                      }`}
+                    >
+                      <PackageCheck className="w-3.5 h-3.5" />
+                      <span>입고·준비완료</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onUpdateOrder(order.id, { status: "PICKED_UP" })
+                      }
+                      disabled={order.status === "PICKED_UP" || isCanceled}
+                      className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
+                        order.status === "PICKED_UP"
+                          ? "bg-slate-800 text-white"
+                          : "bg-slate-100 text-slate-800 hover:bg-slate-200 disabled:opacity-40"
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>픽업(수령) 완료</span>
+                    </button>
+
+                    {!isCanceled ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void onUpdateOrder(order.id, { status: "CANCELED" })
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold hover:bg-rose-100 ml-auto"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        <span>주문취소</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void onUpdateOrder(order.id, { status: "RESERVED" })
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-300 ml-auto"
+                      >
+                        <span>주문복구</span>
+                      </button>
                     )}
                   </div>
                 </div>
-
-                {/* 원터치 상태 처리 버튼 */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void onUpdateOrder(order.id, { is_paid: !order.is_paid })
-                    }
-                    className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
-                      order.is_paid
-                        ? "bg-blue-600 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>{order.is_paid ? "결제확인 완료" : "결제확인 체크"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void onUpdateOrder(order.id, { status: "READY" })
-                    }
-                    disabled={order.status === "READY" || isCanceled}
-                    className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
-                      order.status === "READY"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
-                    }`}
-                  >
-                    <PackageCheck className="w-3.5 h-3.5" />
-                    <span>입고·준비완료</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void onUpdateOrder(order.id, { status: "PICKED_UP" })
-                    }
-                    disabled={order.status === "PICKED_UP" || isCanceled}
-                    className={`inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition ${
-                      order.status === "PICKED_UP"
-                        ? "bg-slate-800 text-white"
-                        : "bg-slate-100 text-slate-800 hover:bg-slate-200 disabled:opacity-40"
-                    }`}
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>픽업(수령) 완료</span>
-                  </button>
-
-                  {!isCanceled ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void onUpdateOrder(order.id, { status: "CANCELED" })
-                      }
-                      className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold hover:bg-rose-100 ml-auto"
-                    >
-                      <XCircle className="w-3.5 h-3.5" />
-                      <span>주문취소</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void onUpdateOrder(order.id, { status: "RESERVED" })
-                      }
-                      className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-300 ml-auto"
-                    >
-                      <span>주문복구</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })
+              );
+            })
         )}
       </section>
 
@@ -413,21 +466,31 @@ export function AdminOrdersTab({
         {showBotTester && (
           <div className="px-5 pb-5 space-y-3 border-t border-slate-800 pt-3">
             <p className="text-xs text-slate-300 leading-relaxed">
-              단톡방에 직접 <strong>&quot;설향 딸기 2팩, 샤인머스켓 1박스요&quot;</strong>
-              라고 입력된 메시지를 자동 파싱해 주문 목록에 추가하는 테스트입니다.
+              단톡방에 직접{" "}
+              <strong>&quot;설향 딸기 2팩, 샤인머스켓 1박스요&quot;</strong>
+              라고 입력된 메시지를 자동 파싱해 주문 목록에 추가하는
+              테스트입니다.
             </p>
             <form
               onSubmit={onSimulateKakaoBot}
               className="grid grid-cols-1 sm:grid-cols-3 gap-2"
             >
+              <label htmlFor="admin-AdminOrdersTab-input-2" className="sr-only">
+                카톡방 닉네임
+              </label>
               <input
+                id="admin-AdminOrdersTab-input-2"
                 type="text"
                 value={botSender}
                 onChange={(e) => setBotSender(e.target.value)}
                 placeholder="카톡방 닉네임"
                 className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold text-white"
               />
+              <label htmlFor="admin-AdminOrdersTab-input-3" className="sr-only">
+                예: 설향 딸기 2팩 샤인머스켓 1박스
+              </label>
               <input
+                id="admin-AdminOrdersTab-input-3"
                 type="text"
                 value={botMessage}
                 onChange={(e) => setBotMessage(e.target.value)}

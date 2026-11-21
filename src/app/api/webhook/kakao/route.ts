@@ -13,7 +13,10 @@ function hasValidWebhookSecret(request: NextRequest): boolean {
 
   const headerSecret =
     request.headers.get("x-webhook-secret")?.trim() ||
-    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+    request.headers
+      .get("authorization")
+      ?.replace(/^Bearer\s+/i, "")
+      .trim();
 
   if (!headerSecret) return false;
 
@@ -28,14 +31,16 @@ function hasValidWebhookSecret(request: NextRequest): boolean {
  * 자동으로 품목과 수량을 파싱하고 DB에 주문을 생성합니다.
  */
 export async function POST(request: NextRequest) {
-  if (!isAdminRequestAuthenticated(request) && !hasValidWebhookSecret(request)) {
-    return NextResponse.json(
-      { error: "웹훅 인증이 필요합니다." },
-      { status: 401 }
-    );
-  }
-
   try {
+    if (
+      !(await isAdminRequestAuthenticated(request)) &&
+      !hasValidWebhookSecret(request)
+    ) {
+      return NextResponse.json(
+        { error: "웹훅 인증이 필요합니다." },
+        { status: 401 },
+      );
+    }
     const body = (await request.json()) as {
       sender: string;
       message: string;
@@ -43,16 +48,35 @@ export async function POST(request: NextRequest) {
       messageId?: string;
     };
 
+    if (
+      typeof body.messageId !== "string" ||
+      !/^[a-zA-Z0-9_-]{1,140}$/.test(body.messageId)
+    )
+      throw new Error("고유 messageId가 필요합니다.");
+    if (
+      typeof body.sender !== "string" ||
+      typeof body.message !== "string" ||
+      body.message.length > 2000 ||
+      body.sender.length > 60
+    )
+      throw new Error("메시지 형식 또는 길이가 올바르지 않습니다.");
+    if (body.phoneLast4 && !/^\d{4}$/.test(body.phoneLast4))
+      throw new Error("연락처 뒷4자리를 확인해 주세요.");
     const sender = (body.sender ?? "").trim();
     const message = (body.message ?? "").trim();
 
     if (!sender || !message) {
       return NextResponse.json(
         { error: "보낸 사람 닉네임과 채팅 메시지가 필요합니다." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
+    if (message.includes("[주문접수]") || message.includes("주문번호:"))
+      return NextResponse.json({
+        matched: false,
+        reply: "기존 주문 공유는 새로 접수하지 않습니다.",
+      });
     const products = await getProducts({ includeHidden: false });
     const parsedItems = parseKakaoChatMessage(message, products);
 
@@ -63,7 +87,7 @@ export async function POST(request: NextRequest) {
           reply:
             "일반 대화로 분류되었습니다. (판매 중인 과일명이 포함되지 않음)",
         },
-        { status: 200 }
+        { status: 200 },
       );
     }
 
@@ -94,7 +118,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : "카톡 메시지 파싱 중 오류가 발생했습니다.";
+      err instanceof Error
+        ? err.message
+        : "카톡 메시지 파싱 중 오류가 발생했습니다.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

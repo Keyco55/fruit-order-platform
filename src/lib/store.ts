@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { hashPassword } from "@/lib/password";
+import { orderFingerprint, validateOrderInput } from "@/lib/order-validation";
+import type { OrderQuery } from "@/lib/order-period";
 import crypto from "node:crypto";
 import {
   buildProductAggregations,
@@ -23,10 +27,13 @@ interface StoreDatabase {
   products: Product[];
   orders: Order[];
   orderIdempotencyMap?: Record<string, string>;
+  orderFingerprintMap?: Record<string, string>;
   productIdempotencyMap?: Record<string, string>;
 }
 
-const TMP_STORE_PATH = path.join("/tmp", "fruit-order-platform-store-v3.json");
+const TMP_STORE_PATH =
+  process.env.FRUIT_STORE_PATH ||
+  path.join(os.tmpdir(), "fruit-order-platform-store-v3.json");
 
 function getTodayDateStr(): string {
   return getKstDateString();
@@ -46,8 +53,11 @@ export function createInitialSeedData(): StoreDatabase {
     pickup_guide: "매일 10:00 ~ 20:30 (매장 앞 잠시 정차 픽업 가능)",
     bank_account: "카카오뱅크 3333-01-2345678 (예금주: 후르츠파머)",
     kakao_openchat_url:
-      process.env.NEXT_PUBLIC_KAKAO_OPENCHAT_URL || "https://open.kakao.com/o/g7mQI5Wi",
-    admin_pin: "@112233",
+      process.env.NEXT_PUBLIC_KAKAO_OPENCHAT_URL ||
+      "https://open.kakao.com/o/g7mQI5Wi",
+    admin_pin: process.env.ADMIN_INITIAL_PASSWORD
+      ? hashPassword(process.env.ADMIN_INITIAL_PASSWORD)
+      : "!unconfigured",
     show_price: true,
     show_stock: true,
     updated_at: nowIso,
@@ -410,7 +420,9 @@ function saveDb(db: StoreDatabase): void {
   try {
     fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(db, null, 2), "utf-8");
   } catch {
-    // Ignore write failure on restricted environments
+    throw new Error(
+      "demo 데이터를 저장할 수 없습니다. 접수 상태를 확인해 주세요.",
+    );
   }
 }
 
@@ -425,7 +437,7 @@ export function getStoreSettings(): StoreSettings {
 }
 
 export function updateStoreSettings(
-  patch: Partial<Omit<StoreSettings, "id" | "branch_code">>
+  patch: Partial<Omit<StoreSettings, "id" | "branch_code">>,
 ): StoreSettings {
   const db = loadDb();
   db.settings = {
@@ -446,12 +458,7 @@ export function getProducts(options?: { includeHidden?: boolean }): Product[] {
   return list.filter((p) => p.is_visible);
 }
 
-export function getOrders(options?: {
-  nickname?: string;
-  phone?: string;
-  phoneLast4?: string;
-  includeCanceled?: boolean;
-}): Order[] {
+export function getOrders(options?: OrderQuery): Order[] {
   const db = loadDb();
   return enrichAndFilterOrders(db.orders, db.products, options);
 }
@@ -462,6 +469,8 @@ export function getProductAggregations(): ProductAggregation[] {
 }
 
 export function createOrder(input: CreateOrderInput): Order {
+  input = validateOrderInput(input);
+  const fingerprint = orderFingerprint(input);
   const db = loadDb();
   const idemKey = input.idempotency_key?.trim();
   if (idemKey) {
@@ -469,6 +478,10 @@ export function createOrder(input: CreateOrderInput): Order {
     if (existingOrderId) {
       const existing = db.orders.find((o) => o.id === existingOrderId);
       if (existing) {
+        if (db.orderFingerprintMap?.[idemKey] !== fingerprint)
+          throw new Error(
+            "같은 요청키의 주문 내용이 다릅니다. 기존 접수를 확인해 주세요.",
+          );
         return existing;
       }
     }
@@ -491,7 +504,7 @@ export function createOrder(input: CreateOrderInput): Order {
     if (!Number.isFinite(qty) || qty <= 0) continue;
     qtyByProduct.set(
       reqItem.product_id,
-      (qtyByProduct.get(reqItem.product_id) ?? 0) + qty
+      (qtyByProduct.get(reqItem.product_id) ?? 0) + qty,
     );
   }
 
@@ -503,7 +516,7 @@ export function createOrder(input: CreateOrderInput): Order {
     }
     if (product.is_limited && product.remain_stock < quantity) {
       throw new Error(
-        `'${product.name}' 상품의 남은 수량(${product.remain_stock}개)이 부족합니다.`
+        `'${product.name}' 상품의 남은 수량(${product.remain_stock}개)이 부족합니다.`,
       );
     }
     validatedItems.push({ product, quantity });
@@ -517,25 +530,28 @@ export function createOrder(input: CreateOrderInput): Order {
   const orderId = `ord-${crypto.randomUUID().slice(0, 8)}`;
   let totalAmount = 0;
 
-  const orderItems: OrderItem[] = validatedItems.map(({ product, quantity }) => {
-    if (product.is_limited) {
-      product.remain_stock = Math.max(0, product.remain_stock - quantity);
-    }
-    const subtotal = product.price * quantity;
-    totalAmount += subtotal;
+  const orderItems: OrderItem[] = validatedItems.map(
+    ({ product, quantity }) => {
+      if (product.is_limited) {
+        product.remain_stock = Math.max(0, product.remain_stock - quantity);
+        product.stock_version = (product.stock_version ?? 0) + 1;
+      }
+      const subtotal = product.price * quantity;
+      totalAmount += subtotal;
 
-    return {
-      id: `item-${crypto.randomUUID().slice(0, 8)}`,
-      order_id: orderId,
-      product_id: product.id,
-      product_name: product.name,
-      unit_label: product.unit_label,
-      unit_price: product.price,
-      quantity,
-      subtotal,
-      is_received: product.is_received,
-    };
-  });
+      return {
+        id: `item-${crypto.randomUUID().slice(0, 8)}`,
+        order_id: orderId,
+        product_id: product.id,
+        product_name: product.name,
+        unit_label: product.unit_label,
+        unit_price: product.price,
+        quantity,
+        subtotal,
+        is_received: product.is_received,
+      };
+    },
+  );
 
   const inferredFulfillment =
     input.fulfillment_type ??
@@ -574,6 +590,8 @@ export function createOrder(input: CreateOrderInput): Order {
   if (idemKey) {
     db.orderIdempotencyMap = db.orderIdempotencyMap ?? {};
     db.orderIdempotencyMap[idemKey] = newOrder.id;
+    db.orderFingerprintMap ??= {};
+    db.orderFingerprintMap[idemKey] = fingerprint;
   }
   saveDb(db);
   return newOrder;
@@ -586,7 +604,7 @@ export function updateOrderAdmin(
     is_paid?: boolean;
     memo?: string;
     pickup_time?: string;
-  }
+  },
 ): Order {
   const db = loadDb();
   const order = db.orders.find((o) => o.id === orderId);
@@ -602,9 +620,10 @@ export function updateOrderAdmin(
     for (const item of order.items) {
       const product = db.products.find((p) => p.id === item.product_id);
       if (product && product.is_limited) {
+        product.stock_version = (product.stock_version ?? 0) + 1;
         product.remain_stock = Math.min(
           product.total_stock,
-          product.remain_stock + item.quantity
+          product.remain_stock + item.quantity,
         );
       }
     }
@@ -619,7 +638,7 @@ export function updateOrderAdmin(
       if (product && product.is_limited) {
         if (product.remain_stock < item.quantity) {
           throw new Error(
-            `'${product.name}' 재고가 부족하여 주문을 복구할 수 없습니다.`
+            `'${product.name}' 재고가 부족하여 주문을 복구할 수 없습니다.`,
           );
         }
         restoreTargets.push({ product, quantity: item.quantity });
@@ -627,6 +646,7 @@ export function updateOrderAdmin(
     }
     for (const { product, quantity } of restoreTargets) {
       product.remain_stock -= quantity;
+      product.stock_version = (product.stock_version ?? 0) + 1;
     }
   }
 
@@ -654,7 +674,7 @@ export function createProductAdmin(input: CreateProductInput): Product {
 
   const maxSort = db.products.reduce(
     (max, p) => (p.sort_order > max ? p.sort_order : max),
-    0
+    0,
   );
 
   const totalStock = input.is_limited
@@ -663,7 +683,7 @@ export function createProductAdmin(input: CreateProductInput): Product {
   const remainStock = input.is_limited
     ? Math.min(
         totalStock,
-        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock)))
+        Math.max(0, Math.floor(Number(input.remain_stock ?? totalStock))),
       )
     : 999;
 
@@ -707,7 +727,8 @@ export function createProductAdmin(input: CreateProductInput): Product {
 
 export function updateProductAdmin(
   productId: string,
-  patch: Partial<Omit<Product, "id" | "created_at">>
+  patch: Partial<Omit<Product, "id" | "created_at">>,
+  expectedStockVersion?: number,
 ): Product {
   const db = loadDb();
   const product = db.products.find((p) => p.id === productId);
@@ -715,12 +736,24 @@ export function updateProductAdmin(
     throw new Error("상품을 찾을 수 없습니다.");
   }
 
-  Object.assign(product, patch);
+  const stockChange = ["remain_stock", "total_stock", "is_limited"].some(
+    (k) => k in patch,
+  );
+  if (stockChange && expectedStockVersion !== (product.stock_version ?? 0))
+    throw new Error(
+      "재고가 변경됐습니다. 최신 데이터를 확인한 뒤 다시 저장해 주세요.",
+    );
+  const { stock_version: _version, ...safePatch } = patch;
+  Object.assign(product, safePatch);
+  if (stockChange) product.stock_version = (product.stock_version ?? 0) + 1;
   if (product.is_limited) {
-    product.total_stock = Math.max(0, Math.floor(Number(product.total_stock) || 0));
+    product.total_stock = Math.max(
+      0,
+      Math.floor(Number(product.total_stock) || 0),
+    );
     product.remain_stock = Math.min(
       product.total_stock,
-      Math.max(0, Math.floor(Number(product.remain_stock) || 0))
+      Math.max(0, Math.floor(Number(product.remain_stock) || 0)),
     );
   }
   saveDb(db);
@@ -729,7 +762,7 @@ export function updateProductAdmin(
 
 export function adjustProductStockAdmin(
   productId: string,
-  delta: number
+  delta: number,
 ): Product {
   const db = loadDb();
   const product = db.products.find((p) => p.id === productId);
@@ -742,6 +775,7 @@ export function adjustProductStockAdmin(
 
   const nextRemain = Math.max(0, product.remain_stock + Math.trunc(delta));
   product.remain_stock = nextRemain;
+  product.stock_version = (product.stock_version ?? 0) + 1;
   product.total_stock = Math.max(product.total_stock, nextRemain);
   saveDb(db);
   return product;

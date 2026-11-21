@@ -13,19 +13,18 @@ import type { CreateProductInput, Product } from "@/types/domain";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json(
-      { error: "관리자 인증이 필요합니다." },
-      { status: 401 }
-    );
-  }
-
   try {
+    if (!(await isAdminRequestAuthenticated(request))) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 },
+      );
+    }
     const body = (await request.json()) as CreateProductInput;
     if (!body.name || !body.name.trim()) {
       return NextResponse.json(
         { error: "과일 상품명을 입력해 주세요." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -33,7 +32,7 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(totalStock) || totalStock < 0) {
       return NextResponse.json(
         { error: "재고 수량은 0 이상의 정수여야 합니다." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -57,7 +56,7 @@ export async function POST(request: NextRequest) {
         products,
         aggregations,
       },
-      { status: 201 }
+      { status: 201 },
     );
   } catch (err) {
     const message =
@@ -67,40 +66,47 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json(
-      { error: "관리자 인증이 필요합니다." },
-      { status: 401 }
-    );
-  }
-
   try {
+    if (!(await isAdminRequestAuthenticated(request))) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 },
+      );
+    }
     const body = (await request.json()) as {
       id: string;
       stock_delta?: number;
+      expected_stock_version?: number;
       patch?: Partial<Omit<Product, "id" | "created_at">>;
     };
 
     if (!body.id) {
       return NextResponse.json(
         { error: "상품 ID가 필요합니다." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     let updated: Product;
-    if (typeof body.stock_delta === "number" && Number.isFinite(body.stock_delta)) {
+    if (
+      typeof body.stock_delta === "number" &&
+      Number.isFinite(body.stock_delta)
+    ) {
       updated = await adjustProductStockAdmin(body.id, body.stock_delta);
     } else if (body.patch) {
       const safePatch = { ...body.patch };
       if (safePatch.category !== undefined) {
         safePatch.category = "PICKUP";
       }
-      updated = await updateProductAdmin(body.id, safePatch);
+      updated = await updateProductAdmin(
+        body.id,
+        safePatch,
+        body.expected_stock_version,
+      );
     } else {
       return NextResponse.json(
         { error: "수정할 내용이 필요합니다." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -122,20 +128,19 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json(
-      { error: "관리자 인증이 필요합니다." },
-      { status: 401 }
-    );
-  }
-
   try {
+    if (!(await isAdminRequestAuthenticated(request))) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 },
+      );
+    }
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
     if (!id) {
       return NextResponse.json(
         { error: "삭제할 상품 ID가 필요합니다." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 

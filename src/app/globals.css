@@ -1,29 +1,31 @@
 @import "tailwindcss";
 
 :root {
-  --toss-blue: #0064FF;
-  --toss-blue-hover: #0052D1;
-  --toss-blue-soft: #E8F3FF;
-  --toss-blue-text: #1B64DA;
-  --toss-bg: #F2F4F6;
-  --toss-card: #FFFFFF;
-  --toss-input: #F2F4F6;
-  --toss-header: #191F28;
-  --toss-text: #191F28;
-  --toss-text-secondary: #8B95A1;
-  --toss-text-muted: #B0B8C1;
-  --toss-border: #E5E8EB;
-  --toss-danger: #F04452;
-  --toss-danger-soft: #FFEBEE;
-  --toss-warning: #FF8A00;
-  --toss-warning-soft: #FFF4E5;
-  --toss-success: #03B26C;
-  --toss-success-soft: #E8F8F0;
+  --toss-blue: #0064ff;
+  --toss-blue-hover: #0052d1;
+  --toss-blue-soft: #e8f3ff;
+  --toss-blue-text: #1b64da;
+  --toss-bg: #f2f4f6;
+  --toss-card: #ffffff;
+  --toss-input: #f2f4f6;
+  --toss-header: #191f28;
+  --toss-text: #191f28;
+  --toss-text-secondary: #8b95a1;
+  --toss-text-muted: #b0b8c1;
+  --toss-border: #e5e8eb;
+  --toss-danger: #f04452;
+  --toss-danger-soft: #ffebee;
+  --toss-warning: #ff8a00;
+  --toss-warning-soft: #fff4e5;
+  --toss-success: #03b26c;
+  --toss-success-soft: #e8f8f0;
   --toss-radius-sm: 10px;
   --toss-radius-md: 12px;
   --toss-radius-lg: 14px;
   --toss-radius-card: 16px;
-  --toss-font: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --toss-font:
+    "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+    "Malgun Gothic", "Noto Sans KR", sans-serif;
   --toss-shadow: 0 4px 24px rgba(25, 31, 40, 0.07);
 }
 
@@ -43,4 +45,24 @@ body {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* 모바일 터치·키보드 접근성: 기존 색상과 카드 스타일은 유지한다. */
+button {
+  min-height: 44px;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+:where(button, a, input, textarea, select, summary):focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+[role="dialog"] {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+[role="dialog"] > div {
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
 }

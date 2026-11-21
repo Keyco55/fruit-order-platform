@@ -1,14 +1,23 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import Link from "next/link";
+import { SafeImage } from "@/components/SafeImage";
+import { getOrderAttempt, ORDER_ATTEMPT_KEY } from "@/lib/order-attempt";
+import { useModalAccessibility } from "@/lib/use-modal-accessibility";
 import { copyTextSafe } from "@/lib/clipboard";
-import { formatKRW, matchesKoreanSearch } from "@/lib/formatters";
-import type {
-  Order,
-  Product,
-  StoreSettings,
-} from "@/types/domain";
+import {
+  formatKRW,
+  matchesKoreanSearch,
+  formatOrderClipboardText,
+} from "@/lib/formatters";
+import type { Order, Product, StoreSettings } from "@/types/domain";
 
 interface CartItem {
   id: string;
@@ -29,10 +38,18 @@ const PHONE_STORAGE_KEY = "customer_phone_yucheon";
 const CART_STORAGE_KEY = "customer_cart_yucheon";
 
 export default function CustomerStorePage() {
-  const [settings, setSettings] = useState<Omit<StoreSettings, "admin_pin"> | null>(null);
+  const [settings, setSettings] = useState<Omit<
+    StoreSettings,
+    "admin_pin"
+  > | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [noticeExpanded, setNoticeExpanded] = useState(false);
+  const [pendingAttempt, setPendingAttempt] = useState(false);
+  const submittingRef = useRef(false);
+  const lookupRequest = useRef(0);
 
   // 1. 내 예약 검색 상태 (닉네임 + 연락처 공통 동기화)
   const [nickInput, setNickInput] = useState("");
@@ -80,10 +97,15 @@ export default function CustomerStorePage() {
   const fetchInitialData = useCallback(async () => {
     try {
       const res = await fetch("/api/bootstrap", { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error("상품 정보를 불러오지 못했습니다.");
+      setLoadError("");
       const data = await res.json();
       setSettings(data.settings);
       setProducts(data.products ?? []);
+    } catch (err) {
+      setLoadError(
+        err instanceof Error ? err.message : "네트워크를 확인해 주세요.",
+      );
     } finally {
       setLoading(false);
     }
@@ -108,6 +130,8 @@ export default function CustomerStorePage() {
         localStorage.setItem(PHONE_STORAGE_KEY, trimmedPhone);
       }
 
+      const requestId = ++lookupRequest.current;
+      setAllOrders([]);
       setIsSearching(true);
       setLookupError(null);
       setSearchedNick(trimmedNick);
@@ -116,34 +140,38 @@ export default function CustomerStorePage() {
       try {
         const res = await fetch(
           `/api/orders?nickname=${encodeURIComponent(
-            trimmedNick
+            trimmedNick,
           )}&phone=${encodeURIComponent(trimmedPhone)}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
         );
+        const data = await res.json().catch(() => ({}));
+        if (requestId !== lookupRequest.current) return;
         if (res.ok) {
-          const data = await res.json();
           setAllOrders(data.orders ?? []);
         } else {
-          const errData = await res.json().catch(() => ({}));
+          const errData = data;
           setAllOrders([]);
           setLookupError(
-            errData.error || "예약 내역을 조회하지 못했습니다. 잠시 후 다시 시도해 주세요."
+            errData.error ||
+              "예약 내역을 조회하지 못했습니다. 잠시 후 다시 시도해 주세요.",
           );
         }
       } catch {
+        if (requestId !== lookupRequest.current) return;
         setAllOrders([]);
         setLookupError("네트워크 오류로 예약 내역을 조회하지 못했습니다.");
       } finally {
-        setIsSearching(false);
+        if (requestId === lookupRequest.current) setIsSearching(false);
       }
     },
-    []
+    [],
   );
 
   useEffect(() => {
     void fetchInitialData();
 
     if (typeof window !== "undefined") {
+      setPendingAttempt(!!localStorage.getItem(ORDER_ATTEMPT_KEY));
       const savedNick = localStorage.getItem(NICK_STORAGE_KEY) || "";
       const savedPhone = localStorage.getItem(PHONE_STORAGE_KEY) || "";
       if (savedNick) setNickInput(savedNick);
@@ -188,7 +216,8 @@ export default function CustomerStorePage() {
   }, []);
 
   // 장바구니 열기
-  const openCartModal = () => {
+  const openCartModal = async () => {
+    await refreshCart();
     setIsCartModalOpen(true);
   };
 
@@ -212,7 +241,7 @@ export default function CustomerStorePage() {
         return;
       }
       nextCart = cartItems.map((c, i) =>
-        i === existingIndex ? { ...c, qty: c.qty + 1 } : c
+        i === existingIndex ? { ...c, qty: c.qty + 1 } : c,
       );
     } else {
       nextCart = [
@@ -272,7 +301,7 @@ export default function CustomerStorePage() {
   // 클립보드 주문 텍스트 생성 헬퍼 (픽업 전용)
   const buildClipboardText = (
     nickname: string,
-    items: Array<{ name: string; qty: number }>
+    items: Array<{ name: string; qty: number }>,
   ) => {
     const lines = [
       `[${settings?.store_name || "후르츠파머 유천점"}] 닉네임: ${nickname} (매장 픽업)`,
@@ -281,41 +310,147 @@ export default function CustomerStorePage() {
     return lines.join("\n");
   };
 
-  const generateRequestId = () =>
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const refreshCart = async (freshProducts?: Product[]) => {
+    try {
+      const res = freshProducts
+        ? null
+        : await fetch("/api/bootstrap", { cache: "no-store" });
+      if (res && !res.ok) throw new Error("최신 상품을 확인하지 못했습니다.");
+      const fresh: Product[] =
+        freshProducts ?? (await res!.json()).products ?? [];
+      setProducts(fresh);
+      // 접수 결과가 불명확하면 원래 품목을 보존해 같은 요청키로 재시도한다.
+      if (localStorage.getItem(ORDER_ATTEMPT_KEY)) return;
+      const next = cartItems.flatMap((item) => {
+        const p = fresh.find((p) => p.id === item.id && p.is_visible);
+        const qty = p
+          ? Math.min(item.qty, p.is_limited ? p.remain_stock : 999)
+          : 0;
+        return p && qty > 0
+          ? [
+              {
+                id: p.id,
+                name: p.name,
+                unit_label: p.unit_label,
+                price: p.price,
+                qty,
+              },
+            ]
+          : [];
+      });
+      if (JSON.stringify(next) !== JSON.stringify(cartItems)) {
+        updateCartState(next);
+        showToast("장바구니 가격·판매 상태·수량을 최신 정보로 갱신했습니다.");
+      }
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : "상품 갱신에 실패했습니다.",
+      );
+    }
+  };
+
+  useModalAccessibility(
+    orderSuccessReceipt
+      ? "receipt"
+      : promoProduct
+        ? "promo"
+        : isCartModalOpen
+          ? "cart"
+          : orderModalProduct
+            ? "single"
+            : false,
+    () => {
+      if (submittingRef.current) return;
+      setOrderSuccessReceipt(null);
+      setPromoProduct(null);
+      setIsCartModalOpen(false);
+      setOrderModalProduct(null);
+    },
+  );
 
   const submitWebOrder = async (
     cleanNick: string,
     cleanPhone: string,
     orderItems: Array<{ product_id: string; quantity: number }>,
     displayItems: Array<{ name: string; qty: number }>,
-    clearCartOnSuccess: boolean
+    clearCartOnSuccess: boolean,
   ): Promise<boolean> => {
-    if (isSubmittingOrder) return false;
+    if (submittingRef.current) return false;
+    submittingRef.current = true;
     setIsSubmittingOrder(true);
 
     try {
+      const payload = {
+        kakao_nickname: cleanNick,
+        customer_phone: cleanPhone.replace(/\D/g, ""),
+        fulfillment_type: "PICKUP" as const,
+        delivery_address: "",
+        source: "WEB" as const,
+        items: orderItems,
+      };
+      const hadAttempt = !!localStorage.getItem(ORDER_ATTEMPT_KEY);
+      const attempt = await getOrderAttempt(payload, localStorage);
+      setPendingAttempt(true);
+      if (!hadAttempt) {
+        try {
+          const latest = await fetch("/api/bootstrap", { cache: "no-store" });
+          if (!latest.ok)
+            throw new Error("최신 가격·재고를 확인하지 못했습니다.");
+          const fresh: Product[] = (await latest.json()).products ?? [];
+          setProducts(fresh);
+          const changed = orderItems.some((i) => {
+            const p = fresh.find((p) => p.id === i.product_id);
+            const old = clearCartOnSuccess
+              ? cartItems.find((p) => p.id === i.product_id)
+              : orderModalProduct?.product;
+            return (
+              !p ||
+              !old ||
+              p.price !== old.price ||
+              (p.is_limited && p.remain_stock < i.quantity)
+            );
+          });
+          if (changed) {
+            localStorage.removeItem(ORDER_ATTEMPT_KEY);
+            setPendingAttempt(false);
+            await refreshCart(fresh);
+            if (orderModalProduct) {
+              const p = fresh.find(
+                (p) => p.id === orderModalProduct.product.id,
+              );
+              setOrderModalProduct(
+                p
+                  ? {
+                      product: p,
+                      qty: Math.min(
+                        orderModalProduct.qty,
+                        p.is_limited ? p.remain_stock : 999,
+                      ),
+                    }
+                  : null,
+              );
+            }
+            throw new Error(
+              "가격·판매 상태·재고가 변경됐습니다. 최신 내용을 확인하고 다시 접수해 주세요.",
+            );
+          }
+        } catch (err) {
+          localStorage.removeItem(ORDER_ATTEMPT_KEY);
+          setPendingAttempt(false);
+          throw err;
+        }
+      }
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kakao_nickname: cleanNick,
-          customer_phone: cleanPhone,
-          fulfillment_type: "PICKUP",
-          delivery_address: "",
-          source: "WEB",
-          idempotency_key: generateRequestId(),
-          items: orderItems,
-        }),
+        body: JSON.stringify({ ...payload, idempotency_key: attempt.key }),
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.order) {
         alert(
           data.error ||
-            "주문 접수에 실패했습니다. 재고나 입력 정보를 확인한 뒤 다시 시도해 주세요."
+            "주문 접수에 실패했습니다. 재고나 입력 정보를 확인한 뒤 다시 시도해 주세요.",
         );
         return false;
       }
@@ -336,7 +471,9 @@ export default function CustomerStorePage() {
         updateCartState([]);
       }
 
-      const copyText = buildClipboardText(cleanNick, displayItems);
+      localStorage.removeItem(ORDER_ATTEMPT_KEY);
+      setPendingAttempt(false);
+      const copyText = `주문번호: ${data.order.id}\n${formatOrderClipboardText(data.order)}`;
       const copied = await copyTextSafe(copyText);
 
       setOrderSuccessReceipt({
@@ -349,10 +486,15 @@ export default function CustomerStorePage() {
         showToast("예약이 접수되고 주문서가 복사되었습니다!");
       }
       return true;
-    } catch {
-      alert("네트워크 오류로 주문을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } catch (err) {
+      alert(
+        err instanceof Error && err.message.includes("확인")
+          ? err.message
+          : "접수 결과를 확인하지 못했습니다. 예약 내역을 확인하거나 같은 내용으로 다시 시도해 주세요. 동일 요청키로 중복 접수를 방지합니다.",
+      );
       return false;
     } finally {
+      submittingRef.current = false;
       setIsSubmittingOrder(false);
     }
   };
@@ -369,7 +511,9 @@ export default function CustomerStorePage() {
 
     const cleanPhone = phoneInput.trim();
     if (cleanPhone.replace(/\D/g, "").length < 9) {
-      alert("문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!");
+      alert(
+        "문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!",
+      );
       orderPhoneRef.current?.focus();
       return;
     }
@@ -380,7 +524,7 @@ export default function CustomerStorePage() {
       cleanPhone,
       [{ product_id: product.id, quantity: qty }],
       [{ name: product.name, qty }],
-      false
+      false,
     );
     if (ok) {
       setOrderModalProduct(null);
@@ -404,7 +548,9 @@ export default function CustomerStorePage() {
 
     const cleanPhone = phoneInput.trim();
     if (cleanPhone.replace(/\D/g, "").length < 9) {
-      alert("문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!");
+      alert(
+        "문제 발생 시 연락드릴 수 있도록 휴대폰 번호를 정확히 입력해 주세요!",
+      );
       cartPhoneRef.current?.focus();
       return;
     }
@@ -414,7 +560,7 @@ export default function CustomerStorePage() {
       cleanPhone,
       cartItems.map((c) => ({ product_id: c.id, quantity: c.qty })),
       cartItems.map((c) => ({ name: c.name, qty: c.qty })),
-      true
+      true,
     );
     if (ok) {
       setIsCartModalOpen(false);
@@ -427,11 +573,11 @@ export default function CustomerStorePage() {
 
   const cartTotalAmount = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.price * item.qty, 0),
-    [cartItems]
+    [cartItems],
   );
   const cartTotalCount = useMemo(
     () => cartItems.reduce((sum, item) => sum + item.qty, 0),
-    [cartItems]
+    [cartItems],
   );
 
   // 예약 조회 필터 (Asia/Seoul KST 기준)
@@ -446,7 +592,7 @@ export default function CustomerStorePage() {
 
     if (resTab === "TODAY") {
       return valid.filter(
-        (o) => o.status !== "PICKED_UP" && o.order_date <= todayStr
+        (o) => o.status !== "PICKED_UP" && o.order_date <= todayStr,
       );
     }
     return valid;
@@ -496,10 +642,46 @@ export default function CustomerStorePage() {
       {/* 2. 메인 컨테이너 */}
       <main className="w-[95%] max-w-[800px] mx-auto my-4 px-2 box-border space-y-4">
         {/* 상단 매장 대표 이미지(썸네일) 브랜드 배너 */}
-        <section className="bg-white rounded-2xl border border-[#E5E8EB] p-4 shadow-xs flex items-center justify-between gap-3.5">
+        {pendingAttempt && (
+          <div role="status" className="rounded-xl bg-amber-50 p-3 text-sm">
+            접수 확인이 필요한 주문이 있습니다.{" "}
+            <Link className="underline font-bold" href="/orders">
+              예약 내역 확인
+            </Link>
+            <button
+              type="button"
+              className="block py-2 underline"
+              onClick={() => {
+                if (
+                  confirm(
+                    "이전 주문이 미접수인 것을 확인하셨나요? 접수된 주문이 있다면 해제 후 다시 접수하지 마세요.",
+                  )
+                ) {
+                  localStorage.removeItem(ORDER_ATTEMPT_KEY);
+                  setPendingAttempt(false);
+                }
+              }}
+            >
+              미접수 확인 후 새 시도
+            </button>
+          </div>
+        )}
+        {loadError && (
+          <div role="alert" className="rounded-xl bg-rose-50 p-3 text-sm">
+            {loadError}
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={() => void fetchInitialData()}
+            >
+              다시 불러오기
+            </button>
+          </div>
+        )}
+        <section className="bg-white rounded-2xl border border-[#E5E8EB] p-3 shadow-xs flex items-center justify-between gap-3.5">
           <div className="flex items-center gap-3.5 min-w-0">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border border-[#E5E8EB] bg-white shrink-0 flex items-center justify-center">
-              <img
+            <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl overflow-hidden border border-[#E5E8EB] bg-white shrink-0 flex items-center justify-center">
+              <SafeImage
                 src="/images/fruit-farmer-thumb.jpg"
                 alt="후르츠파머 유천점"
                 className="w-full h-full object-contain"
@@ -512,7 +694,7 @@ export default function CustomerStorePage() {
               <p className="text-xs sm:text-sm text-[#8B95A1] mt-0.5 line-clamp-2">
                 {settings?.subtitle || "매일 새벽 경매 1등품 직송 신선 과일"}
               </p>
-              <p className="text-[11px] text-[#03B26C] font-semibold mt-1 truncate">
+              <p className="text-[11px] text-[#03B26C] font-semibold mt-1">
                 📍 {settings?.pickup_guide || "매장 방문 픽업 안내"}
               </p>
             </div>
@@ -532,15 +714,32 @@ export default function CustomerStorePage() {
 
         {/* 공지사항 배너 */}
         {settings?.notice_text && (
-          <div className="p-4 text-sm leading-relaxed whitespace-pre-wrap rounded-2xl bg-[#FFF4E5] text-[#FF8A00] border border-[#ffe0b0] shadow-xs">
-            {settings.notice_text}
+          <div className="p-3 text-sm rounded-2xl bg-[#FFF4E5] text-[#9A4D00] border border-[#ffe0b0]">
+            <p
+              className={
+                noticeExpanded ? "whitespace-pre-wrap" : "line-clamp-2"
+              }
+            >
+              {settings.notice_text}
+            </p>
+            <button
+              type="button"
+              aria-expanded={noticeExpanded}
+              className="mt-1 py-1 text-xs font-bold underline"
+              onClick={() => setNoticeExpanded((v) => !v)}
+            >
+              {noticeExpanded ? "공지 접기" : "공지 더 보기"}
+            </button>
           </div>
         )}
 
         {/* -------------------------------------------------------------
             SECTION 1: 내 예약 확인 (인라인 + 상세 페이지 링크)
            ------------------------------------------------------------- */}
-        <section>
+        <details className="rounded-xl border border-[#E5E8EB] p-3">
+          <summary className="font-bold cursor-pointer py-1">
+            내 예약 빠른 조회
+          </summary>
           <div className="flex items-center justify-between mb-3">
             <div className="text-[1.15rem] font-bold text-[#191F28]">
               내 예약 확인
@@ -554,22 +753,32 @@ export default function CustomerStorePage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 mb-3">
+            <label htmlFor="app-page-input-1" className="sr-only">
+              오픈카톡 닉네임
+            </label>
             <input
+              id="app-page-input-1"
               type="text"
               value={nickInput}
               onChange={(e) => handleNicknameChange(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void fetchReservation(nickInput, phoneInput);
+                if (e.key === "Enter")
+                  void fetchReservation(nickInput, phoneInput);
               }}
               placeholder="오픈카톡 닉네임"
               className="w-full min-w-0 p-3 sm:px-3.5 sm:py-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm sm:text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
             />
+            <label htmlFor="app-page-input-2" className="sr-only">
+              연락처 (010-0000-0000 또는 뒷4자리)
+            </label>
             <input
+              id="app-page-input-2"
               type="tel"
               value={phoneInput}
               onChange={(e) => handlePhoneChange(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void fetchReservation(nickInput, phoneInput);
+                if (e.key === "Enter")
+                  void fetchReservation(nickInput, phoneInput);
               }}
               placeholder="연락처 (010-0000-0000 또는 뒷4자리)"
               className="w-full min-w-0 p-3 sm:px-3.5 sm:py-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm sm:text-base bg-white text-[#191F28] outline-none focus:border-[#0064FF] transition"
@@ -585,7 +794,9 @@ export default function CustomerStorePage() {
 
           {/* 예약 조회 결과 영역 */}
           {isSearching ? (
-            <div className="text-center py-5 text-sm text-[#8B95A1]">조회중...</div>
+            <div className="text-center py-5 text-sm text-[#8B95A1]">
+              조회중...
+            </div>
           ) : lookupError ? (
             <div className="bg-white rounded-2xl border border-rose-200 p-4 text-center space-y-2">
               <div className="text-xs font-semibold text-[#F04452]">
@@ -593,7 +804,12 @@ export default function CustomerStorePage() {
               </div>
               <button
                 type="button"
-                onClick={() => void fetchReservation(searchedNick || nickInput, searchedPhone || phoneInput)}
+                onClick={() =>
+                  void fetchReservation(
+                    searchedNick || nickInput,
+                    searchedPhone || phoneInput,
+                  )
+                }
                 className="px-3.5 py-1.5 rounded-xl bg-[#4F92F8] text-white text-xs font-bold"
               >
                 다시 조회
@@ -675,7 +891,7 @@ export default function CustomerStorePage() {
                               </div>
                             </div>
                           </div>
-                        ))
+                        )),
                       )}
                     </div>
                     <div className="bg-[#FFF4E5] px-4 py-3.5 text-right font-bold text-[#FF8A00] border-t border-[#E5E8EB] text-base">
@@ -686,7 +902,7 @@ export default function CustomerStorePage() {
               </div>
             )
           )}
-        </section>
+        </details>
 
         {/* -------------------------------------------------------------
             SECTION 2: 현재 구매 가능 제품 (매장 픽업)
@@ -703,7 +919,11 @@ export default function CustomerStorePage() {
 
           {/* 제품명 실시간 검색 */}
           <div className="mb-3">
+            <label htmlFor="app-page-input-3" className="sr-only">
+              제품명 검색
+            </label>
             <input
+              id="app-page-input-3"
               type="text"
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
@@ -724,7 +944,8 @@ export default function CustomerStorePage() {
               </div>
             ) : (
               filteredProducts.map((product) => {
-                const isSoldOut = product.is_limited && product.remain_stock <= 0;
+                const isSoldOut =
+                  product.is_limited && product.remain_stock <= 0;
 
                 return (
                   <article
@@ -752,7 +973,7 @@ export default function CustomerStorePage() {
                       {/* 80x80 이미지 썸네일 */}
                       <div className="w-20 h-20 rounded-xl overflow-hidden bg-[#F2F4F6] border border-[#E5E8EB] shrink-0 flex items-center justify-center">
                         {product.images[0] ? (
-                          <img
+                          <SafeImage
                             src={product.images[0]}
                             alt={product.name}
                             className={`w-full h-full object-cover ${
@@ -760,7 +981,9 @@ export default function CustomerStorePage() {
                             }`}
                           />
                         ) : (
-                          <span className="text-xs text-[#B0B8C1]">사진 없음</span>
+                          <span className="text-xs text-[#B0B8C1]">
+                            사진 없음
+                          </span>
                         )}
                       </div>
 
@@ -771,7 +994,7 @@ export default function CustomerStorePage() {
                             🏬 픽업
                           </span>
                           <div
-                            className={`font-bold text-[1.02rem] truncate ${
+                            className={`font-bold text-[1.02rem] line-clamp-2 ${
                               isSoldOut ? "text-[#B0B8C1]" : "text-[#191F28]"
                             }`}
                           >
@@ -784,7 +1007,19 @@ export default function CustomerStorePage() {
                             단위: {product.unit_label}
                           </span>
                           <span className="font-semibold text-[#191F28]">
+                            {product.original_price &&
+                            product.original_price > product.price ? (
+                              <del className="block text-xs text-[#8B95A1]">
+                                {formatKRW(product.original_price)}
+                              </del>
+                            ) : null}
                             가격: {formatKRW(product.price)}
+                          </span>
+                          <span className="col-span-2 text-xs">
+                            판매일 {product.sale_date} ·{" "}
+                            {product.is_received
+                              ? "입고완료 · 매장 안내에 따라 픽업"
+                              : "입고 전 · 픽업 가능 여부 확인"}
                           </span>
                           <span>산지: {product.origin || "국산"}</span>
                           <span>
@@ -795,7 +1030,9 @@ export default function CustomerStorePage() {
                                 잔여 {product.remain_stock}개
                               </strong>
                             ) : (
-                              <strong className="text-[#03B26C]">구매가능</strong>
+                              <strong className="text-[#03B26C]">
+                                구매가능
+                              </strong>
                             )}
                           </span>
                         </div>
@@ -867,6 +1104,15 @@ export default function CustomerStorePage() {
       {orderModalProduct && (
         <div
           role="dialog"
+          aria-label={
+            orderSuccessReceipt
+              ? "예약 접수 완료"
+              : promoProduct
+                ? "상품 상세"
+                : isCartModalOpen
+                  ? "장바구니 예약"
+                  : "단품 예약"
+          }
           aria-modal="true"
           className="fixed inset-0 z-50 bg-[#191F28]/45 flex items-center justify-center p-4"
           onClick={() => setOrderModalProduct(null)}
@@ -882,6 +1128,7 @@ export default function CustomerStorePage() {
               <button
                 type="button"
                 onClick={() => setOrderModalProduct(null)}
+                aria-label="닫기"
                 className="w-8 h-8 rounded-full bg-[#F2F4F6] text-[#8B95A1] text-lg font-bold flex items-center justify-center"
               >
                 &times;
@@ -901,7 +1148,7 @@ export default function CustomerStorePage() {
                     </div>
                     <div className="text-xs text-[#1B64DA]/80 mt-0.5">
                       {formatKRW(
-                        orderModalProduct.product.price * orderModalProduct.qty
+                        orderModalProduct.product.price * orderModalProduct.qty,
                       )}
                     </div>
                   </div>
@@ -912,7 +1159,7 @@ export default function CustomerStorePage() {
                         setOrderModalProduct((prev) =>
                           prev
                             ? { ...prev, qty: Math.max(1, prev.qty - 1) }
-                            : null
+                            : null,
                         )
                       }
                       className="w-7 h-7 rounded-lg bg-white text-[#1B64DA] font-bold border border-[#c9e0ff] flex items-center justify-center"
@@ -931,7 +1178,9 @@ export default function CustomerStorePage() {
                             ? prev.product.remain_stock
                             : 999;
                           if (prev.qty + 1 > maxStock) {
-                            alert(`남은 수량(${maxStock}개)을 초과할 수 없습니다.`);
+                            alert(
+                              `남은 수량(${maxStock}개)을 초과할 수 없습니다.`,
+                            );
                             return prev;
                           }
                           return { ...prev, qty: prev.qty + 1 };
@@ -947,10 +1196,14 @@ export default function CustomerStorePage() {
 
               {/* 닉네임 입력란 */}
               <div>
-                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
+                <label
+                  htmlFor="customer-field-1"
+                  className="block text-xs font-bold text-[#191F28] mb-1.5"
+                >
                   오픈카톡 닉네임 <span className="text-[#F04452]">*필수</span>
                 </label>
                 <input
+                  id="customer-field-1"
                   ref={orderNickRef}
                   type="text"
                   value={nickInput}
@@ -962,10 +1215,15 @@ export default function CustomerStorePage() {
 
               {/* 연락처 입력란 */}
               <div>
-                <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                  연락처 (휴대폰 번호) <span className="text-[#F04452]">*필수</span>
+                <label
+                  htmlFor="customer-field-2"
+                  className="block text-xs font-bold text-[#191F28] mb-1.5"
+                >
+                  연락처 (휴대폰 번호){" "}
+                  <span className="text-[#F04452]">*필수</span>
                 </label>
                 <input
+                  id="customer-field-2"
                   ref={orderPhoneRef}
                   type="tel"
                   value={phoneInput}
@@ -974,12 +1232,14 @@ export default function CustomerStorePage() {
                   className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
                 />
                 <p className="text-[11px] text-[#8B95A1] mt-1 m-0">
-                  단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만 사용됩니다.
+                  단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만
+                  사용됩니다.
                 </p>
               </div>
 
               <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
-                매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가 자동 복사됩니다.
+                매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가
+                자동 복사됩니다.
               </p>
 
               <button
@@ -1001,6 +1261,15 @@ export default function CustomerStorePage() {
       {isCartModalOpen && (
         <div
           role="dialog"
+          aria-label={
+            orderSuccessReceipt
+              ? "예약 접수 완료"
+              : promoProduct
+                ? "상품 상세"
+                : isCartModalOpen
+                  ? "장바구니 예약"
+                  : "단품 예약"
+          }
           aria-modal="true"
           className="fixed inset-0 z-50 bg-[#191F28]/45 flex items-center justify-center p-4"
           onClick={() => setIsCartModalOpen(false)}
@@ -1016,6 +1285,7 @@ export default function CustomerStorePage() {
               <button
                 type="button"
                 onClick={() => setIsCartModalOpen(false)}
+                aria-label="닫기"
                 className="w-8 h-8 rounded-full bg-[#F2F4F6] text-[#8B95A1] text-lg font-bold flex items-center justify-center"
               >
                 &times;
@@ -1079,10 +1349,15 @@ export default function CustomerStorePage() {
               {cartItems.length > 0 && (
                 <div className="space-y-3 pt-3 border-t border-[#E5E8EB]">
                   <div>
-                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                      오픈카톡 닉네임 <span className="text-[#F04452]">*필수</span>
+                    <label
+                      htmlFor="customer-field-3"
+                      className="block text-xs font-bold text-[#191F28] mb-1.5"
+                    >
+                      오픈카톡 닉네임{" "}
+                      <span className="text-[#F04452]">*필수</span>
                     </label>
                     <input
+                      id="customer-field-3"
                       ref={cartNickRef}
                       type="text"
                       value={nickInput}
@@ -1093,10 +1368,15 @@ export default function CustomerStorePage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-[#191F28] mb-1.5">
-                      연락처 (휴대폰 번호) <span className="text-[#F04452]">*필수</span>
+                    <label
+                      htmlFor="customer-field-4"
+                      className="block text-xs font-bold text-[#191F28] mb-1.5"
+                    >
+                      연락처 (휴대폰 번호){" "}
+                      <span className="text-[#F04452]">*필수</span>
                     </label>
                     <input
+                      id="customer-field-4"
                       ref={cartPhoneRef}
                       type="tel"
                       value={phoneInput}
@@ -1105,12 +1385,14 @@ export default function CustomerStorePage() {
                       className="w-full p-3 border-[1.5px] border-[#E5E8EB] rounded-xl text-sm font-semibold bg-white text-[#191F28] outline-none focus:border-[#0064FF]"
                     />
                     <p className="text-[11px] text-[#8B95A1] mt-1 m-0">
-                      단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만 사용됩니다.
+                      단톡방 메시지에는 노출되지 않으며 매장 확인·예약 조회에만
+                      사용됩니다.
                     </p>
                   </div>
 
                   <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
-                    매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가 자동 복사됩니다.
+                    매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할
+                    주문서가 자동 복사됩니다.
                   </p>
                 </div>
               )}
@@ -1152,6 +1434,15 @@ export default function CustomerStorePage() {
       {promoProduct && (
         <div
           role="dialog"
+          aria-label={
+            orderSuccessReceipt
+              ? "예약 접수 완료"
+              : promoProduct
+                ? "상품 상세"
+                : isCartModalOpen
+                  ? "장바구니 예약"
+                  : "단품 예약"
+          }
           aria-modal="true"
           className="fixed inset-0 z-50 bg-[#191F28]/45 flex items-center justify-center p-4"
           onClick={() => setPromoProduct(null)}
@@ -1176,7 +1467,7 @@ export default function CustomerStorePage() {
             <div className="p-5 overflow-y-auto space-y-3.5 flex-1">
               {promoProduct.images.length > 0 && (
                 <div className="relative rounded-xl overflow-hidden bg-black h-64 flex items-center justify-center">
-                  <img
+                  <SafeImage
                     src={
                       promoProduct.images[activeImageIndex] ||
                       promoProduct.images[0]
@@ -1190,7 +1481,9 @@ export default function CustomerStorePage() {
                         type="button"
                         onClick={() =>
                           setActiveImageIndex((prev) =>
-                            prev > 0 ? prev - 1 : promoProduct.images.length - 1
+                            prev > 0
+                              ? prev - 1
+                              : promoProduct.images.length - 1,
                           )
                         }
                         className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center text-lg font-bold"
@@ -1201,7 +1494,9 @@ export default function CustomerStorePage() {
                         type="button"
                         onClick={() =>
                           setActiveImageIndex((prev) =>
-                            prev < promoProduct.images.length - 1 ? prev + 1 : 0
+                            prev < promoProduct.images.length - 1
+                              ? prev + 1
+                              : 0,
                           )
                         }
                         className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 text-white flex items-center justify-center text-lg font-bold"
@@ -1265,6 +1560,15 @@ export default function CustomerStorePage() {
       {orderSuccessReceipt && (
         <div
           role="dialog"
+          aria-label={
+            orderSuccessReceipt
+              ? "예약 접수 완료"
+              : promoProduct
+                ? "상품 상세"
+                : isCartModalOpen
+                  ? "장바구니 예약"
+                  : "단품 예약"
+          }
           aria-modal="true"
           className="fixed inset-0 z-50 bg-[#191F28]/45 flex items-center justify-center p-4"
           onClick={() => setOrderSuccessReceipt(null)}
@@ -1280,6 +1584,7 @@ export default function CustomerStorePage() {
               <button
                 type="button"
                 onClick={() => setOrderSuccessReceipt(null)}
+                aria-label="닫기"
                 className="w-8 h-8 rounded-full bg-[#F2F4F6] text-[#8B95A1] text-lg font-bold flex items-center justify-center"
               >
                 &times;
@@ -1287,6 +1592,15 @@ export default function CustomerStorePage() {
             </div>
 
             <div className="p-5 space-y-3.5">
+              <div className="text-xs break-all">
+                주문번호: <strong>{orderSuccessReceipt.order.id}</strong>
+              </div>
+              <p className="text-sm">
+                픽업 안내: {settings?.pickup_guide}
+                <br />
+                예약 접수와 입금 확인은 별도입니다. 준비 상태는 예약 내역에서
+                확인해 주세요.
+              </p>
               <div className="p-3.5 rounded-xl bg-[#E8F8F0] border border-[#b8ebd4] text-xs text-[#027A48] font-semibold leading-relaxed">
                 {orderSuccessReceipt.copied
                   ? "주문서가 클립보드에 복사되었습니다. 아래 [공구방으로 이동] 버튼을 눌러 채팅방에 붙여넣기해 주세요!"
@@ -1298,17 +1612,20 @@ export default function CustomerStorePage() {
               </pre>
 
               <div className="text-right text-sm font-bold text-[#0064FF]">
-                결제 예정 금액: {formatKRW(orderSuccessReceipt.order.total_amount)}
+                결제 예정 금액:{" "}
+                {formatKRW(orderSuccessReceipt.order.total_amount)}
               </div>
 
               <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={async () => {
-                    const ok = await copyTextSafe(orderSuccessReceipt.clipboardText);
+                    const ok = await copyTextSafe(
+                      orderSuccessReceipt.clipboardText,
+                    );
                     if (ok) {
                       setOrderSuccessReceipt((prev) =>
-                        prev ? { ...prev, copied: true } : null
+                        prev ? { ...prev, copied: true } : null,
                       );
                       showToast("주문서가 다시 복사되었습니다!");
                     }

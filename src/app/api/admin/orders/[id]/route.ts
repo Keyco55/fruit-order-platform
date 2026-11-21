@@ -12,16 +12,15 @@ export const dynamic = "force-dynamic";
 
 export async function PATCH(
   request: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ id: string }> },
 ) {
-  if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json(
-      { error: "관리자 인증이 필요합니다." },
-      { status: 401 }
-    );
-  }
-
   try {
+    if (!(await isAdminRequestAuthenticated(request))) {
+      return NextResponse.json(
+        { error: "관리자 인증이 필요합니다." },
+        { status: 401 },
+      );
+    }
     const { id } = await context.params;
     const body = (await request.json()) as {
       status?: OrderStatus;

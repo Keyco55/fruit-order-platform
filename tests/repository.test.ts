@@ -227,16 +227,18 @@ describe("리포지토리 및 공통 스토어 헬퍼 검증", () => {
     ];
 
     assert.equal(
-      enrichAndFilterOrders(orders, [], { nickname: "단골", phone: "5678" }).length,
-      0
+      enrichAndFilterOrders(orders, [], { nickname: "단골", phone: "5678" })
+        .length,
+      0,
     );
     assert.equal(
-      enrichAndFilterOrders(orders, [], { nickname: "단골맘", phone: "78" }).length,
-      0
+      enrichAndFilterOrders(orders, [], { nickname: "단골맘", phone: "78" })
+        .length,
+      0,
     );
     assert.equal(
       enrichAndFilterOrders(orders, [], { nickname: "", phone: "5678" }).length,
-      0
+      0,
     );
 
     const exact = enrichAndFilterOrders(orders, [], {
@@ -248,7 +250,7 @@ describe("리포지토리 및 공통 스토어 헬퍼 검증", () => {
     const sanitized = sanitizeOrdersForPublic(exact);
     assert.equal(sanitized[0].customer_phone, undefined);
     assert.equal(sanitized[0].delivery_address, undefined);
-    assert.equal(sanitized[0].customer_phone_last4, "5678");
+    assert.equal(sanitized[0].customer_phone_last4, "");
   });
 
   it("동일 idempotency_key로 중복 상품 등록·주문을 요청해도 1건만 생성되어야 한다", async () => {
@@ -302,7 +304,10 @@ describe("리포지토리 및 공통 스토어 헬퍼 검증", () => {
     // 주문이 연결된 상품도 삭제 가능하며 주문 기록은 보존되어야 함
     await deleteProductAdmin(p1.id);
     const afterDeleteProducts = await getProducts({ includeHidden: true });
-    assert.equal(afterDeleteProducts.some((p) => p.id === p1.id), false);
+    assert.equal(
+      afterDeleteProducts.some((p) => p.id === p1.id),
+      false,
+    );
 
     const preservedOrders = await getOrders({
       nickname: "중복방지고객",

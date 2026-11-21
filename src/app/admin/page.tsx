@@ -1,7 +1,19 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import Link from "next/link";
+import { filterOrderPeriod } from "@/lib/order-period";
+import {
+  getKstDateString,
+  buildProductAggregations,
+} from "@/lib/store-helpers";
+import { useModalAccessibility } from "@/lib/use-modal-accessibility";
 import {
   BarChart3,
   CheckCircle2,
@@ -36,8 +48,7 @@ import type {
   Order,
   OrderStatus,
   Product,
-  ProductAggregation,
-  StoreSettings,
+  PublicStoreSettings,
 } from "@/types/domain";
 
 type AdminTab = "DASHBOARD" | "ORDERS" | "PRODUCTS" | "SETTINGS";
@@ -59,11 +70,55 @@ export default function AdminDashboardPage() {
   const [dataMode, setDataMode] = useState<"supabase" | "demo" | null>(null);
   const [activeTab, setActiveTab] = useState<AdminTab>("DASHBOARD");
 
-  const [settings, setSettings] = useState<StoreSettings | null>(null);
+  const [settings, setSettings] = useState<PublicStoreSettings | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [aggregations, setAggregations] = useState<ProductAggregation[]>([]);
+  const [allOrders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState<"TODAY" | "RANGE" | "ALL">("TODAY");
+  const [fromDate, setFromDate] = useState(getKstDateString);
+  const [toDate, setToDate] = useState(getKstDateString);
+  const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const markDirty = useCallback((value: boolean) => {
+    dirtyRef.current = value;
+    setDirty(value);
+  }, []);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const adminRequestId = useRef(0);
+  const settingsBaseline = useRef<PublicStoreSettings | null>(null);
+  const from =
+    period === "ALL"
+      ? undefined
+      : period === "TODAY"
+        ? getKstDateString()
+        : fromDate;
+  const to =
+    period === "ALL"
+      ? undefined
+      : period === "TODAY"
+        ? getKstDateString()
+        : toDate;
+  const orders = useMemo(
+    () => filterOrderPeriod(allOrders, from, to),
+    [allOrders, from, to],
+  );
+  const scopedAggregations = useMemo(
+    () => buildProductAggregations(products, orders),
+    [products, orders],
+  );
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (dirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const [refreshingTab, setRefreshingTab] = useState<AdminTab | null>(null);
@@ -77,7 +132,7 @@ export default function AdminDashboardPage() {
   // 카톡 채팅 자동 파싱 시뮬레이터 상태
   const [botSender, setBotSender] = useState("단톡방어르신");
   const [botMessage, setBotMessage] = useState(
-    "설향 딸기 2팩\n샤인머스켓 1박스 예약이요"
+    "설향 딸기 2팩\n샤인머스켓 1박스 예약이요",
   );
   const [botReply, setBotReply] = useState<string | null>(null);
 
@@ -89,32 +144,56 @@ export default function AdminDashboardPage() {
   }, []);
 
   const fetchAdminData = useCallback(async () => {
+    const requestId = ++adminRequestId.current;
     try {
-      const res = await fetch("/api/bootstrap?admin=1", { cache: "no-store" });
+      const params = new URLSearchParams({
+        admin: "1",
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+      });
+      const res = await fetch(`/api/bootstrap?${params}`, {
+        cache: "no-store",
+      });
+      if (requestId !== adminRequestId.current) return false;
       if (res.status === 401) {
         setIsUnlocked(false);
         return false;
       }
-      if (!res.ok) return false;
+      if (!res.ok) {
+        showToast(
+          "데이터 조회에 실패했습니다. 기존 결과를 최신으로 간주하지 마세요.",
+        );
+        return false;
+      }
       const data = await res.json();
+      if (requestId !== adminRequestId.current) return false;
       setDataMode(data.mode ?? null);
-      setSettings(data.settings);
+      if (!dirtyRef.current) {
+        setSettings(data.settings);
+        settingsBaseline.current = data.settings;
+      }
       setProducts(data.products ?? []);
       setOrders(data.orders ?? []);
-      setAggregations(data.aggregations ?? []);
       setLastUpdatedAt(formatClockNow());
       setIsUnlocked(true);
       return true;
+    } catch {
+      showToast("네트워크 오류로 데이터를 갱신하지 못했습니다.");
+      return false;
     } finally {
-      setLoading(false);
+      if (requestId === adminRequestId.current) setLoading(false);
     }
-  }, []);
+  }, [from, to, showToast]);
 
   useEffect(() => {
     void fetchAdminData();
   }, [fetchAdminData]);
 
   const handleRefreshTab = async (tab: AdminTab, label: string) => {
+    if (dirtyRef.current && !confirm("미저장 변경을 버리고 새로고침할까요?"))
+      return;
+    dirtyRef.current = false;
+    setDirty(false);
     setRefreshingTab(tab);
     try {
       const ok = await fetchAdminData();
@@ -128,6 +207,36 @@ export default function AdminDashboardPage() {
     }
   };
 
+  useEffect(() => {
+    const onVisible = () => {
+      if (
+        document.visibilityState === "visible" &&
+        isUnlocked &&
+        !dirtyRef.current &&
+        !busyRef.current
+      )
+        void fetchAdminData();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [fetchAdminData, isUnlocked]);
+  useModalAccessibility(noticeModalOpen, () => setNoticeModalOpen(false));
+  const runMutation = async (task: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await task();
+    } catch {
+      showToast(
+        "네트워크 오류가 발생했습니다. 최신 상태를 확인한 뒤 다시 시도해 주세요.",
+      );
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
   // 관리자 비밀번호 인증
   const handleVerifyPin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -136,6 +245,7 @@ export default function AdminDashboardPage() {
       return;
     }
 
+    if (isVerifyingPin) return;
     setIsVerifyingPin(true);
     setAuthError(null);
     try {
@@ -153,8 +263,9 @@ export default function AdminDashboardPage() {
       }
       setPinInput("");
       await fetchAdminData();
-      setIsUnlocked(true);
       showToast("🔓 사장님 관리자 모드로 접속되었습니다.");
+    } catch {
+      setAuthError("로그인 요청에 실패했습니다. 네트워크를 확인해 주세요.");
     } finally {
       setIsVerifyingPin(false);
     }
@@ -173,11 +284,11 @@ export default function AdminDashboardPage() {
     setSettings(null);
     setProducts([]);
     setOrders([]);
-    setAggregations([]);
   };
 
   // 데모 데이터 초기화
   const handleResetDemo = async () => {
+    if (!confirm("데모 데이터와 설정을 초기화하고 로그아웃할까요?")) return;
     const res = await fetch("/api/admin/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -188,17 +299,26 @@ export default function AdminDashboardPage() {
       setSettings(data.settings);
       setProducts(data.products);
       setOrders(data.orders);
-      setAggregations(data.aggregations);
       setLastUpdatedAt(formatClockNow());
-      showToast("🔄 샘플 데이터가 초기 상태로 복원되었습니다.");
+      setIsUnlocked(false);
+      showToast(
+        "🔄 샘플 데이터가 초기 상태로 복원되었습니다. 다시 로그인해 주세요.",
+      );
     }
   };
 
   // 주문 상태 원터치 변경
   const handleUpdateOrder = async (
     orderId: string,
-    patch: { status?: OrderStatus; is_paid?: boolean }
+    patch: { status?: OrderStatus; is_paid?: boolean },
   ) => {
+    if (
+      patch.status === "CANCELED" &&
+      !confirm(
+        "주문을 취소할까요? 한정 재고가 복구됩니다. 입금 환불은 별도로 확인해 주세요.",
+      )
+    )
+      return;
     const res = await fetch(`/api/admin/orders/${orderId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -211,7 +331,6 @@ export default function AdminDashboardPage() {
     }
     setOrders(data.orders);
     setProducts(data.products);
-    setAggregations(data.aggregations);
     setLastUpdatedAt(formatClockNow());
     showToast("✅ 주문 상태가 즉시 반영되었습니다.");
   };
@@ -220,22 +339,42 @@ export default function AdminDashboardPage() {
   const handlePatchProduct = async (
     productId: string,
     patch: Partial<Product>,
-    successMsg: string
-  ) => {
-    const res = await fetch("/api/admin/products", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: productId, patch }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showToast(data.error || "상품 변경 실패");
-      return;
+    successMsg: string,
+    expectedVersion?: number,
+  ): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: productId,
+          patch,
+          expected_stock_version:
+            expectedVersion ??
+            products.find((p) => p.id === productId)?.stock_version ??
+            0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || "상품 변경 실패");
+        return false;
+      }
+      setProducts(data.products);
+      setLastUpdatedAt(formatClockNow());
+      await fetchAdminData();
+      showToast(successMsg);
+      return true;
+    } catch {
+      showToast("상품 저장에 실패했습니다. 입력값은 보존됩니다.");
+      return false;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
-    setProducts(data.products);
-    setAggregations(data.aggregations);
-    setLastUpdatedAt(formatClockNow());
-    showToast(successMsg);
   };
 
   // 과일 재고 원자적 증감 (H05)
@@ -251,14 +390,14 @@ export default function AdminDashboardPage() {
       return;
     }
     setProducts(data.products);
-    setAggregations(data.aggregations);
     setLastUpdatedAt(formatClockNow());
+    await fetchAdminData();
     showToast("📦 재고 수량이 즉시 반영되었습니다.");
   };
 
   // 과일 등록
   const handleCreateProduct = async (
-    input: CreateProductInput
+    input: CreateProductInput,
   ): Promise<boolean> => {
     const res = await fetch("/api/admin/products", {
       method: "POST",
@@ -271,14 +410,20 @@ export default function AdminDashboardPage() {
       return false;
     }
     setProducts(data.products);
-    setAggregations(data.aggregations);
     setLastUpdatedAt(formatClockNow());
+    await fetchAdminData();
     showToast("🍎 새 과일이 등록되어 손님 주문 화면에 즉시 노출됩니다!");
     return true;
   };
 
   // 과일 삭제
   const handleDeleteProduct = async (productId: string, name: string) => {
+    if (
+      !confirm(
+        `\'${name}\' 상품을 삭제할까요? 기존 주문 품목·금액은 보존되지만 현재 상품 목록·집계에서는 제외됩니다. 일시 판매중단은 숨김을 사용하세요.`,
+      )
+    )
+      return;
     const res = await fetch(`/api/admin/products?id=${productId}`, {
       method: "DELETE",
     });
@@ -288,8 +433,8 @@ export default function AdminDashboardPage() {
       return;
     }
     setProducts(data.products);
-    setAggregations(data.aggregations);
     setLastUpdatedAt(formatClockNow());
+    await fetchAdminData();
     showToast(`🗑️ '${name}' 상품이 삭제되었습니다.`);
   };
 
@@ -302,6 +447,7 @@ export default function AdminDashboardPage() {
       body: JSON.stringify({
         sender: botSender,
         message: botMessage,
+        messageId: crypto.randomUUID(),
       }),
     });
     const data = await res.json();
@@ -318,37 +464,14 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // 매장 설정 저장
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!settings) return;
-    if (!settings.admin_pin.trim()) {
-      showToast("관리자 비밀번호는 비워둘 수 없습니다.");
-      return;
-    }
-    const res = await fetch("/api/admin/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setSettings(data.settings);
-      setLastUpdatedAt(formatClockNow());
-      showToast("💾 매장 설정 및 비밀번호가 저장되었습니다!");
-    } else {
-      showToast(data.error || "설정 저장에 실패했습니다.");
-    }
-  };
-
   // CSV 다운로드
   const handleDownloadCsv = () => {
-    const csvContent = ordersToCsv(orders);
+    const csvContent = `조회 기준: 주문일(KST),${from || "전체"},${to || "전체"}\n${ordersToCsv(orders)}`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `과일주문집계_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `과일주문집계_${`${from || "전체"}_${to || "전체"}`}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     showToast("📊 엑셀(CSV) 파일 다운로드가 시작되었습니다.");
@@ -357,17 +480,26 @@ export default function AdminDashboardPage() {
   // 상단 KPI 요약 통계
   const kpiStats = useMemo(() => {
     const activeOrders = orders.filter((o) => o.status !== "CANCELED");
-    const totalRevenue = activeOrders.reduce((sum, o) => sum + o.total_amount, 0);
+    const totalRevenue = activeOrders.reduce(
+      (sum, o) => sum + o.total_amount,
+      0,
+    );
     const waitingCount = activeOrders.filter(
-      (o) => o.status === "RESERVED" || o.status === "READY"
+      (o) => o.status === "RESERVED" || o.status === "READY",
     ).length;
     const pickedUpCount = activeOrders.filter(
-      (o) => o.status === "PICKED_UP"
+      (o) => o.status === "PICKED_UP",
     ).length;
 
     return {
       totalOrders: activeOrders.length,
       totalRevenue,
+      paidRevenue: activeOrders
+        .filter((o) => o.is_paid)
+        .reduce((sum, o) => sum + o.total_amount, 0),
+      unpaidRevenue: activeOrders
+        .filter((o) => !o.is_paid)
+        .reduce((sum, o) => sum + o.total_amount, 0),
       waitingCount,
       pickedUpCount,
     };
@@ -381,6 +513,15 @@ export default function AdminDashboardPage() {
         : "https://fruit-order-platform.vercel.app";
     return formatKakaoNoticeText(settings, products, origin);
   }, [settings, products]);
+
+  const changeTab = (tab: AdminTab) => {
+    if (dirtyRef.current && !confirm("미저장 변경을 버리고 탭을 이동할까요?"))
+      return;
+    dirtyRef.current = false;
+    setDirty(false);
+    if (settingsBaseline.current) setSettings(settingsBaseline.current);
+    setActiveTab(tab);
+  };
 
   if (loading) {
     return (
@@ -400,7 +541,9 @@ export default function AdminDashboardPage() {
           <div className="max-w-3xl mx-auto px-3 py-2.5 flex items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span className="font-bold text-slate-100">사장님 전용 관리자</span>
+              <span className="font-bold text-slate-100">
+                사장님 전용 관리자
+              </span>
             </div>
             <Link
               href="/"
@@ -421,13 +564,20 @@ export default function AdminDashboardPage() {
               <Lock className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-lg font-extrabold">사장님 전용 관리자 인증</h1>
+              <h1 className="text-lg font-extrabold">
+                사장님 전용 관리자 인증
+              </h1>
               <p className="text-xs text-slate-400 mt-1">
-                관리자 비밀번호를 입력해야 장부와 상품 관리에 접근할 수 있습니다.
+                관리자 비밀번호를 입력해야 장부와 상품 관리에 접근할 수
+                있습니다.
               </p>
             </div>
             <div className="relative">
+              <label htmlFor="admin-page-input-1" className="sr-only">
+                관리자 비밀번호 입력
+              </label>
               <input
+                id="admin-page-input-1"
                 type={showPin ? "text" : "password"}
                 inputMode="text"
                 autoComplete="current-password"
@@ -446,7 +596,11 @@ export default function AdminDashboardPage() {
                 aria-label={showPin ? "비밀번호 숨기기" : "비밀번호 보기"}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1"
               >
-                {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPin ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
               </button>
             </div>
             {authError && (
@@ -514,93 +668,172 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
+      {busy && (
+        <div
+          role="status"
+          className="fixed inset-0 z-[80] bg-black/20 flex items-center justify-center"
+        >
+          <div className="rounded-xl bg-white p-4 shadow-xl text-sm font-bold">
+            처리 중입니다…
+          </div>
+        </div>
+      )}
       <main className="max-w-3xl mx-auto px-4 pt-4 space-y-4">
         {/* 1. 상단 관리자 헤더 & KPI 요약 카드 (유지) + 4개 분리 탭 네비게이션 */}
-        <section className="bg-white rounded-3xl p-5 shadow-xs border border-slate-100 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-extrabold">
-                👨‍🌾 사장님 모바일 관리 센터
-              </span>
-              <h1 className="text-xl font-black text-slate-900 mt-1">
-                {settings?.store_name || "후르츠파머 유천점"} 실시간 장부
-              </h1>
-            </div>
+        <section className="bg-white rounded-2xl p-3 shadow-xs border border-slate-100 space-y-3">
+          {activeTab === "DASHBOARD" && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-extrabold">
+                  👨‍🌾 사장님 모바일 관리 센터
+                </span>
+                <h1 className="text-xl font-black text-slate-900 mt-1">
+                  {settings?.store_name || "후르츠파머 유천점"} 주문 장부
+                </h1>
+              </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setNoticeModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FEE500] text-[#191919] text-xs font-extrabold hover:brightness-95 shadow-2xs"
-              >
-                <MessageSquarePlus className="w-3.5 h-3.5" />
-                <span>단톡방 공지글 생성</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleDownloadCsv}
-                className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>엑셀(CSV)</span>
-              </button>
-              {dataMode === "demo" && (
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <button
                   type="button"
-                  onClick={handleResetDemo}
-                  title="데모 샘플 데이터를 처음 상태로 되돌립니다"
-                  className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200"
+                  onClick={() => setNoticeModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#FEE500] text-[#191919] text-xs font-extrabold hover:brightness-95 shadow-2xs"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>데모 초기화</span>
+                  <MessageSquarePlus className="w-3.5 h-3.5" />
+                  <span>단톡방 공지글 생성</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadCsv}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>엑셀(CSV)</span>
+                </button>
+                {dataMode === "demo" && (
+                  <button
+                    type="button"
+                    onClick={handleResetDemo}
+                    title="데모 샘플 데이터를 처음 상태로 되돌립니다"
+                    className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>데모 초기화</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleLockAdmin}
+                  title="관리자 화면을 잠그고 로그아웃합니다"
+                  className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-500 text-xs font-semibold hover:bg-slate-200"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+          {(activeTab === "DASHBOARD" || activeTab === "ORDERS") && (
+            <div
+              className="flex flex-wrap gap-2 items-center text-xs"
+              aria-label="주문일 조회 기간"
+            >
+              {(["TODAY", "RANGE", "ALL"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  aria-pressed={period === p}
+                  className={`px-3 py-2 rounded-xl font-bold ${period === p ? "bg-emerald-600 text-white" : "bg-slate-100"}`}
+                  onClick={() => setPeriod(p)}
+                >
+                  {p === "TODAY"
+                    ? "오늘(KST)"
+                    : p === "RANGE"
+                      ? "기간"
+                      : "전체"}
+                </button>
+              ))}
+              {period === "RANGE" && (
+                <>
+                  <label htmlFor="period-from" className="sr-only">
+                    조회 시작일
+                  </label>
+                  <input
+                    id="period-from"
+                    aria-label="조회 시작일"
+                    type="date"
+                    value={fromDate}
+                    max={toDate}
+                    onChange={(e) => setFromDate(e.target.value)}
+                    className="min-w-0 max-w-full rounded-lg border p-2"
+                  />
+                  <label htmlFor="period-to" className="sr-only">
+                    조회 종료일
+                  </label>
+                  <input
+                    id="period-to"
+                    aria-label="조회 종료일"
+                    type="date"
+                    value={toDate}
+                    min={fromDate}
+                    onChange={(e) => setToDate(e.target.value)}
+                    className="min-w-0 max-w-full rounded-lg border p-2"
+                  />
+                </>
               )}
-              <button
-                type="button"
-                onClick={handleLockAdmin}
-                title="관리자 화면을 잠그고 로그아웃합니다"
-                className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl bg-slate-100 text-slate-500 text-xs font-semibold hover:bg-slate-200"
-              >
-                <Lock className="w-3.5 h-3.5" />
-              </button>
+              <span className="text-slate-500">
+                주문일 기준 · 목록/집계/CSV 공통
+              </span>
             </div>
-          </div>
+          )}
+          {/* 선택 기간 KPI */}
+          {activeTab === "DASHBOARD" && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+                  <p className="text-[11px] font-bold text-slate-400">
+                    선택 기간 유효 주문
+                  </p>
+                  <p className="text-xl font-black text-slate-900 mt-0.5">
+                    {kpiStats.totalOrders}건
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100">
+                  <p className="text-[11px] font-bold text-emerald-700">
+                    선택 기간 예약금액
+                  </p>
+                  <p className="text-xl font-black text-emerald-800 mt-0.5">
+                    {formatKRW(kpiStats.totalRevenue)}
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-100">
+                  <p className="text-[11px] font-bold text-amber-700">
+                    픽업 대기 중
+                  </p>
+                  <p className="text-xl font-black text-amber-900 mt-0.5">
+                    {kpiStats.waitingCount}건
+                  </p>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100">
+                  <p className="text-[11px] font-bold text-blue-700">
+                    수령(픽업) 완료
+                  </p>
+                  <p className="text-xl font-black text-blue-900 mt-0.5">
+                    {kpiStats.pickedUpCount}건
+                  </p>
+                </div>
+              </div>
 
-          {/* 실시간 KPI 요약 카드 4개 */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-              <p className="text-[11px] font-bold text-slate-400">오늘 유효 주문</p>
-              <p className="text-xl font-black text-slate-900 mt-0.5">
-                {kpiStats.totalOrders}건
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100">
-              <p className="text-[11px] font-bold text-emerald-700">
-                오늘 예약 매출 합계
-              </p>
-              <p className="text-xl font-black text-emerald-800 mt-0.5">
-                {formatKRW(kpiStats.totalRevenue)}
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-100">
-              <p className="text-[11px] font-bold text-amber-700">픽업 대기 중</p>
-              <p className="text-xl font-black text-amber-900 mt-0.5">
-                {kpiStats.waitingCount}건
-              </p>
-            </div>
-            <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100">
-              <p className="text-[11px] font-bold text-blue-700">수령(픽업) 완료</p>
-              <p className="text-xl font-black text-blue-900 mt-0.5">
-                {kpiStats.pickedUpCount}건
-              </p>
-            </div>
-          </div>
-
+              <div className="text-xs flex flex-wrap gap-3">
+                <span>입금 완료 {formatKRW(kpiStats.paidRevenue)}</span>
+                <span>미입금 {formatKRW(kpiStats.unpaidRevenue)}</span>
+                <span>입금 확인 기준 · 취소 제외</span>
+              </div>
+            </>
+          )}
           {/* 4개 분리 탭 네비게이션 */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 rounded-2xl bg-slate-100 p-1 text-xs font-extrabold">
             <button
               type="button"
-              onClick={() => setActiveTab("DASHBOARD")}
+              onClick={() => changeTab("DASHBOARD")}
               className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition ${
                 activeTab === "DASHBOARD"
                   ? "bg-white text-slate-900 shadow-xs"
@@ -612,7 +845,7 @@ export default function AdminDashboardPage() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("ORDERS")}
+              onClick={() => changeTab("ORDERS")}
               className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition ${
                 activeTab === "ORDERS"
                   ? "bg-white text-slate-900 shadow-xs"
@@ -629,7 +862,7 @@ export default function AdminDashboardPage() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("PRODUCTS")}
+              onClick={() => changeTab("PRODUCTS")}
               className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition ${
                 activeTab === "PRODUCTS"
                   ? "bg-white text-slate-900 shadow-xs"
@@ -641,7 +874,7 @@ export default function AdminDashboardPage() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("SETTINGS")}
+              onClick={() => changeTab("SETTINGS")}
               className={`py-2.5 px-2 rounded-xl flex items-center justify-center gap-1.5 transition ${
                 activeTab === "SETTINGS"
                   ? "bg-white text-slate-900 shadow-xs"
@@ -657,15 +890,17 @@ export default function AdminDashboardPage() {
         {/* 탭별 단일 화면 렌더링 (한 페이지에 모두 펼치지 않고 분리) */}
         {activeTab === "DASHBOARD" && (
           <AdminDashboardTab
-            aggregations={aggregations}
+            aggregations={scopedAggregations}
             orders={orders}
             isRefreshing={refreshingTab === "DASHBOARD"}
             lastUpdatedAt={lastUpdatedAt}
-            onRefresh={() => void handleRefreshTab("DASHBOARD", "판매 대시보드")}
+            onRefresh={() =>
+              void handleRefreshTab("DASHBOARD", "판매 대시보드")
+            }
             onPatchProduct={handlePatchProduct}
             onJumpToOrders={(filter) => {
               setOrderFilter(filter);
-              setActiveTab("ORDERS");
+              changeTab("ORDERS");
             }}
           />
         )}
@@ -680,7 +915,9 @@ export default function AdminDashboardPage() {
             isRefreshing={refreshingTab === "ORDERS"}
             lastUpdatedAt={lastUpdatedAt}
             onRefresh={() => void handleRefreshTab("ORDERS", "고객 주문 현황")}
-            onUpdateOrder={handleUpdateOrder}
+            onUpdateOrder={(id, patch) =>
+              runMutation(() => handleUpdateOrder(id, patch))
+            }
             botSender={botSender}
             setBotSender={setBotSender}
             botMessage={botMessage}
@@ -698,27 +935,44 @@ export default function AdminDashboardPage() {
             onRefresh={() => void handleRefreshTab("PRODUCTS", "상품·재고")}
             onCreateProduct={handleCreateProduct}
             onPatchProduct={handlePatchProduct}
-            onAdjustStock={handleAdjustProductStock}
-            onDeleteProduct={handleDeleteProduct}
+            onAdjustStock={(id, delta) =>
+              runMutation(() => handleAdjustProductStock(id, delta))
+            }
+            onDeleteProduct={(id, name) =>
+              runMutation(() => handleDeleteProduct(id, name))
+            }
             showToast={showToast}
+            onDirtyChange={markDirty}
           />
         )}
 
         {activeTab === "SETTINGS" && settings && (
           <AdminSettingsTab
             settings={settings}
-            setSettings={setSettings}
+            onSaved={(value) => {
+              setSettings(value);
+              settingsBaseline.current = value;
+            }}
+            onDirtyChange={markDirty}
+            onPasswordChanged={() => {
+              setDirty(false);
+              setIsUnlocked(false);
+            }}
             isRefreshing={refreshingTab === "SETTINGS"}
             lastUpdatedAt={lastUpdatedAt}
             onRefresh={() => void handleRefreshTab("SETTINGS", "매장 설정")}
-            onSaveSettings={handleSaveSettings}
           />
         )}
       </main>
 
       {/* 오픈카톡 공지 홍보글 자동 생성 모달 */}
       {noticeModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="공구방 공지 생성"
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+        >
           <div className="bg-white w-full max-w-md rounded-3xl p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-extrabold text-slate-900">
