@@ -1,4 +1,9 @@
-import type { Order, Product, StoreSettings } from "@/types/domain";
+import type {
+  Order,
+  PaymentMethod,
+  Product,
+  StoreSettings,
+} from "@/types/domain";
 
 const CHOSUNG_LIST = [
   "ㄱ",
@@ -57,6 +62,10 @@ export function matchesKoreanSearch(target: string, query: string): boolean {
   return targetChosung.includes(cleanQuery);
 }
 
+export function formatPaymentMethodLabel(method?: PaymentMethod): string {
+  return method === "ONSITE" ? "현장결제" : "계좌입금";
+}
+
 /**
  * 고객이 [주문 전송 및 오픈카톡방 이동] 클릭 시 클립보드에 자동 복사되는 텍스트
  */
@@ -66,9 +75,10 @@ export function formatOrderClipboardText(order: Order): string {
     : "";
   const fulfillmentLabel =
     order.fulfillment_type === "DELIVERY" ? "🚚 배송" : "🏬 매장 픽업";
+  const paymentLabel = formatPaymentMethodLabel(order.payment_method);
 
   const lines: string[] = [
-    `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix} | ${fulfillmentLabel}`,
+    `[주문접수] 닉네임: ${order.kakao_nickname}${phoneSuffix} | ${fulfillmentLabel} | ${paymentLabel}`,
     ...order.items.map(
       (item) =>
         `- ${item.product_name} (${item.unit_label}) x ${item.quantity}`,
@@ -153,6 +163,7 @@ export function ordersToCsv(orders: Order[]): string {
     "배송지",
     "주문품목내역",
     "총결제금액",
+    "결제방식",
     "결제확인",
     "주문상태",
     "픽업예정시간",
@@ -193,6 +204,7 @@ export function ordersToCsv(orders: Order[]): string {
       o.delivery_address || "-",
       itemsSummary,
       o.total_amount,
+      formatPaymentMethodLabel(o.payment_method),
       o.is_paid ? "결제완료" : "미결제",
       statusLabel[o.status] ?? o.status,
       o.pickup_time || "-",

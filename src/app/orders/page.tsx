@@ -365,6 +365,17 @@ export default function CustomerOrdersLookupPage() {
                     <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#E8F3FF] text-[#1B64DA]">
                       🏬 매장 픽업
                     </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${
+                        order.payment_method === "ONSITE"
+                          ? "bg-[#E8F8F0] text-[#027A48]"
+                          : "bg-sky-50 text-sky-700"
+                      }`}
+                    >
+                      {order.payment_method === "ONSITE"
+                        ? "💳 현장결제"
+                        : "🏦 계좌입금"}
+                    </span>
                     {order.status === "PICKED_UP" ? (
                       <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[11px] font-bold">
                         수령완료
@@ -403,9 +414,20 @@ export default function CustomerOrdersLookupPage() {
                   </button>
                 </div>
 
-                <div className="px-4 pt-3 text-xs text-[#8B95A1] break-all">
-                  주문번호: {order.id} ·{" "}
-                  {order.is_paid ? "입금 확인" : "입금 확인 전"}
+                <div className="px-4 pt-3 text-xs text-[#8B95A1] break-all flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>주문번호: {order.id}</span>
+                  <span>·</span>
+                  <span>
+                    {order.is_paid
+                      ? "결제 확인 완료"
+                      : order.payment_method === "ONSITE"
+                        ? "방문 시 현장 결제 예정"
+                        : "입금 확인 전"}
+                  </span>
+                  <span>·</span>
+                  <span className="text-[#4E5968] font-semibold">
+                    ⏰ 픽업예정: {order.pickup_time || "오늘 오후 방문"}
+                  </span>
                 </div>
                 <div className="divide-y divide-[#E5E8EB] px-4">
                   {order.items.map((item) => (

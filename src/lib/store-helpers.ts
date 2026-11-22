@@ -128,6 +128,7 @@ export function sanitizeOrdersForPublic(orders: Order[]): Order[] {
     total_amount: order.total_amount,
     status: order.status,
     is_paid: order.is_paid,
+    payment_method: order.payment_method ?? "BANK_TRANSFER",
     source: order.source,
     pickup_time: order.pickup_time,
     memo: "",

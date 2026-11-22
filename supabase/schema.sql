@@ -57,6 +57,7 @@ create table if not exists public.orders (
   total_amount integer not null check (total_amount >= 0),
   status text not null default 'RESERVED' check (status in ('RESERVED', 'READY', 'PICKED_UP', 'CANCELED')),
   is_paid boolean not null default false,
+  payment_method text not null default 'BANK_TRANSFER' check (payment_method in ('BANK_TRANSFER', 'ONSITE')),
   source text not null default 'WEB' check (source in ('WEB', 'KAKAO_BOT')),
   pickup_time text not null default '오늘 오후 방문',
   memo text not null default '',
@@ -99,6 +100,8 @@ alter table public.order_items enable row level security;
 -- 원자적 주문 생성 RPC (재고 동시성 제어, 중복 접수 방지 및 트랜잭션 보장)
 -- ============================================================================
 drop function if exists public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb);
+drop function if exists public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text);
+drop function if exists public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text, text);
 
 create or replace function public.create_fruit_order(
   p_kakao_nickname text,
@@ -111,7 +114,8 @@ create or replace function public.create_fruit_order(
   p_source text,
   p_items jsonb,
   p_idempotency_key text,
-  p_request_fingerprint text
+  p_request_fingerprint text,
+  p_payment_method text default 'BANK_TRANSFER'
 )
 returns uuid
 language plpgsql
@@ -132,6 +136,7 @@ declare
   v_last4 text;
   v_pickup_time text;
   v_source text;
+  v_payment_method text;
   v_item record;
   v_product public.products%rowtype;
   v_subtotal integer;
@@ -228,6 +233,7 @@ begin
   end if;
 
   v_source := case when p_source = 'KAKAO_BOT' then 'KAKAO_BOT' else 'WEB' end;
+  v_payment_method := case when p_payment_method = 'ONSITE' then 'ONSITE' else 'BANK_TRANSFER' end;
 
   insert into public.orders (
     order_date,
@@ -239,6 +245,7 @@ begin
     total_amount,
     status,
     is_paid,
+    payment_method,
     source,
     pickup_time,
     memo,
@@ -255,6 +262,7 @@ begin
     v_total_amount,
     'RESERVED',
     false,
+    v_payment_method,
     v_source,
     v_pickup_time,
     trim(coalesce(p_memo, '')),
@@ -434,8 +442,8 @@ begin
 end;
 $$;
 
-revoke all on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text) from public, anon, authenticated;
-grant execute on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text) to service_role;
+revoke all on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text, text) from public, anon, authenticated;
+grant execute on function public.create_fruit_order(text, text, text, text, text, text, text, text, jsonb, text, text, text) to service_role;
 
 revoke all on function public.update_fruit_order_admin(uuid, text, boolean, text, text) from public, anon, authenticated;
 grant execute on function public.update_fruit_order_admin(uuid, text, boolean, text, text) to service_role;

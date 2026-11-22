@@ -14,6 +14,7 @@ import type {
   Order,
   OrderItem,
   OrderStatus,
+  PaymentMethod,
   Product,
   ProductAggregation,
   StoreSettings,
@@ -71,6 +72,7 @@ interface RawOrderRow {
   total_amount: number;
   status: OrderStatus;
   is_paid: boolean;
+  payment_method?: PaymentMethod | null;
   source: Order["source"];
   pickup_time: string;
   memo: string;
@@ -126,6 +128,7 @@ function mapOrderRow(row: RawOrderRow): Order {
     total_amount: row.total_amount,
     status: row.status,
     is_paid: row.is_paid,
+    payment_method: row.payment_method === "ONSITE" ? "ONSITE" : "BANK_TRANSFER",
     source: row.source,
     pickup_time: row.pickup_time,
     memo: row.memo,
@@ -361,9 +364,19 @@ export async function createOrderSupabase(
     p_items: validItems,
     p_idempotency_key: input.idempotency_key?.trim() || null,
     p_request_fingerprint: fingerprint,
+    p_payment_method:
+      input.payment_method === "ONSITE" ? "ONSITE" : "BANK_TRANSFER",
   });
 
   if (error || !orderId) {
+    if (
+      error?.code === "PGRST202" ||
+      error?.message?.includes("p_payment_method")
+    ) {
+      throw new Error(
+        "결제 방식 저장을 위한 DB 마이그레이션(supabase/migrations/202611220001_order_payment_method.sql)을 먼저 적용해 주세요.",
+      );
+    }
     throw new Error(error?.message || "주문 처리 중 오류가 발생했습니다.");
   }
 
@@ -701,6 +714,7 @@ export async function resetDemoDatabaseSupabase(): Promise<{
     total_amount: o.total_amount,
     status: o.status,
     is_paid: o.is_paid,
+    payment_method: o.payment_method,
     source: o.source,
     pickup_time: o.pickup_time,
     memo: o.memo,

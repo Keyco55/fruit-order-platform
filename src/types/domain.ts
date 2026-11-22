@@ -6,6 +6,8 @@ export type OrderStatus = "RESERVED" | "READY" | "PICKED_UP" | "CANCELED";
 
 export type OrderSource = "WEB" | "KAKAO_BOT";
 
+export type PaymentMethod = "BANK_TRANSFER" | "ONSITE";
+
 export interface StoreSettings {
   id: string;
   branch_code: string;
@@ -70,6 +72,7 @@ export interface Order {
   total_amount: number;
   status: OrderStatus;
   is_paid: boolean;
+  payment_method: PaymentMethod;
   source: OrderSource;
   pickup_time: string;
   memo: string;
@@ -102,6 +105,7 @@ export interface CreateOrderInput {
   delivery_address?: string;
   pickup_time?: string;
   memo?: string;
+  payment_method?: PaymentMethod;
   source?: OrderSource;
   idempotency_key?: string;
   items: Array<{

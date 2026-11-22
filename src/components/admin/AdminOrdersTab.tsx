@@ -293,12 +293,29 @@ export function AdminOrdersTab({
                         </span>
                         <span
                           className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
-                            order.is_paid
-                              ? "bg-blue-600 text-white"
-                              : "bg-rose-100 text-rose-700"
+                            order.payment_method === "ONSITE"
+                              ? "bg-violet-100 text-violet-800"
+                              : "bg-sky-100 text-sky-800"
                           }`}
                         >
-                          {order.is_paid ? "💳 결제완료" : "미결제"}
+                          {order.payment_method === "ONSITE"
+                            ? "💳 현장결제"
+                            : "🏦 계좌입금"}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
+                            order.is_paid
+                              ? "bg-blue-600 text-white"
+                              : order.payment_method === "ONSITE"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-rose-100 text-rose-700"
+                          }`}
+                        >
+                          {order.is_paid
+                            ? "💳 결제완료"
+                            : order.payment_method === "ONSITE"
+                              ? "방문결제 대기"
+                              : "입금대기(미결제)"}
                         </span>
                         {order.status === "RESERVED" && (
                           <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] font-bold">
@@ -352,7 +369,9 @@ export function AdminOrdersTab({
                       </div>
                     ))}
                     <div className="pt-1.5 mt-1 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-                      <span>⏰ 픽업예정: {order.pickup_time || "미지정"}</span>
+                      <span className="font-bold text-slate-700">
+                        ⏰ 픽업예정: {order.pickup_time || "미지정"}
+                      </span>
                       {order.memo && (
                         <span className="text-amber-800 font-semibold">
                           📝 메모: {order.memo}
@@ -378,7 +397,11 @@ export function AdminOrdersTab({
                     >
                       <CreditCard className="w-3.5 h-3.5" />
                       <span>
-                        {order.is_paid ? "결제확인 완료" : "결제확인 체크"}
+                        {order.is_paid
+                          ? "결제확인 완료"
+                          : order.payment_method === "ONSITE"
+                            ? "현장결제 완료 체크"
+                            : "결제확인 체크"}
                       </span>
                     </button>
 

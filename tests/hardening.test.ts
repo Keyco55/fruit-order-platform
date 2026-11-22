@@ -28,6 +28,7 @@ import {
 import { getOrderAttempt, ORDER_ATTEMPT_KEY } from "../src/lib/order-attempt";
 import {
   formatKakaoNoticeText,
+  formatOrderClipboardText,
   ordersToCsv,
   parseKakaoChatMessage,
 } from "../src/lib/formatters";
@@ -576,5 +577,55 @@ describe("2차 QA 기능·보안 회귀", () => {
     assert.equal(publicJson.products[0].id, newProduct.id);
     assert.equal(publicJson.products[0].name, "설향 딸기 3x5");
     assert.equal(publicJson.products[0].origin, "충남 논산");
+  });
+
+  it("주문 시 결제 방식(현장결제·계좌입금)과 픽업 방문 예정 시간이 저장·출력되고 오입력을 차단한다", async () => {
+    const invalidMethodRes = await ordersPOST(
+      request("/api/orders", {
+        ...body(),
+        payment_method: "UNKNOWN_METHOD",
+      }),
+    );
+    assert.equal(invalidMethodRes.status, 400);
+
+    const idemKey = randomUUID();
+    const onsiteRes = await ordersPOST(
+      request("/api/orders", {
+        ...body(),
+        idempotency_key: idemKey,
+        payment_method: "ONSITE",
+        pickup_time: "오늘 저녁 (17시 이후)",
+      }),
+    );
+    assert.equal(onsiteRes.status, 201);
+    const onsiteJson = await onsiteRes.json();
+    assert.equal(onsiteJson.order.payment_method, "ONSITE");
+    assert.equal(onsiteJson.order.pickup_time, "오늘 저녁 (17시 이후)");
+
+    const changedMethodRetry = await ordersPOST(
+      request("/api/orders", {
+        ...body(),
+        idempotency_key: idemKey,
+        payment_method: "BANK_TRANSFER",
+        pickup_time: "오늘 저녁 (17시 이후)",
+      }),
+    );
+    assert.equal(changedMethodRetry.status, 400);
+
+    const lookupRes = await ordersGET(
+      request("/api/orders?nickname=QA%20%EA%B3%A0%EA%B0%9D&phone=0000"),
+    );
+    assert.equal(lookupRes.status, 200);
+    const lookupJson = await lookupRes.json();
+    assert.equal(lookupJson.orders[0].payment_method, "ONSITE");
+    assert.equal(lookupJson.orders[0].pickup_time, "오늘 저녁 (17시 이후)");
+
+    const clipboard = formatOrderClipboardText(onsiteJson.order);
+    assert.match(clipboard, /현장결제/);
+    assert.match(clipboard, /픽업예정: 오늘 저녁 \(17시 이후\)/);
+
+    const csv = ordersToCsv([onsiteJson.order]);
+    assert.match(csv, /결제방식/);
+    assert.match(csv, /현장결제/);
   });
 });

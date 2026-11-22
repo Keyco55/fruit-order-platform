@@ -14,10 +14,11 @@ import { useModalAccessibility } from "@/lib/use-modal-accessibility";
 import { copyTextSafe } from "@/lib/clipboard";
 import {
   formatKRW,
-  matchesKoreanSearch,
   formatOrderClipboardText,
+  formatPaymentMethodLabel,
+  matchesKoreanSearch,
 } from "@/lib/formatters";
-import type { Order, Product, StoreSettings } from "@/types/domain";
+import type { Order, PaymentMethod, Product, StoreSettings } from "@/types/domain";
 
 interface CartItem {
   id: string;
@@ -38,6 +39,144 @@ const PHONE_STORAGE_KEY = "customer_phone_yucheon";
 const CART_STORAGE_KEY = "customer_cart_yucheon";
 
 const MAX_ORDER_QTY_PER_ITEM = 999;
+
+const PICKUP_TIME_PRESETS = [
+  "오늘 오후 (12~17시)",
+  "오늘 저녁 (17시 이후)",
+  "내일 방문",
+] as const;
+
+function OrderCheckoutOptions({
+  idPrefix,
+  pickupTimeOption,
+  setPickupTimeOption,
+  customPickupTime,
+  setCustomPickupTime,
+  paymentMethod,
+  setPaymentMethod,
+  bankAccount,
+  onCopyBankAccount,
+}: {
+  idPrefix: string;
+  pickupTimeOption: string;
+  setPickupTimeOption: (value: string) => void;
+  customPickupTime: string;
+  setCustomPickupTime: (value: string) => void;
+  paymentMethod: PaymentMethod;
+  setPaymentMethod: (value: PaymentMethod) => void;
+  bankAccount?: string;
+  onCopyBankAccount: (account: string) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <span className="block text-xs font-bold text-[#191F28] mb-1.5">
+          픽업 방문 예정 시간 <span className="text-[#0064FF]">*선택</span>
+        </span>
+        <div className="grid grid-cols-2 gap-1.5">
+          {PICKUP_TIME_PRESETS.map((slot) => {
+            const active = pickupTimeOption === slot;
+            return (
+              <button
+                key={slot}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setPickupTimeOption(slot)}
+                className={`px-2.5 py-2 rounded-xl text-xs font-bold border transition text-center ${
+                  active
+                    ? "bg-[#E8F3FF] border-[#4F92F8] text-[#1B64DA]"
+                    : "bg-white border-[#E5E8EB] text-[#4E5968] hover:bg-[#F9FAFB]"
+                }`}
+              >
+                {slot}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            aria-pressed={pickupTimeOption === "CUSTOM"}
+            onClick={() => setPickupTimeOption("CUSTOM")}
+            className={`px-2.5 py-2 rounded-xl text-xs font-bold border transition text-center ${
+              pickupTimeOption === "CUSTOM"
+                ? "bg-[#E8F3FF] border-[#4F92F8] text-[#1B64DA]"
+                : "bg-white border-[#E5E8EB] text-[#4E5968] hover:bg-[#F9FAFB]"
+            }`}
+          >
+            직접 입력
+          </button>
+        </div>
+        {pickupTimeOption === "CUSTOM" && (
+          <div className="mt-2">
+            <label htmlFor={`${idPrefix}-custom-pickup`} className="sr-only">
+              방문 예정 시간 직접 입력
+            </label>
+            <input
+              id={`${idPrefix}-custom-pickup`}
+              type="text"
+              maxLength={40}
+              value={customPickupTime}
+              onChange={(e) => setCustomPickupTime(e.target.value)}
+              placeholder="예: 오늘 4시 30분경 방문"
+              className="w-full p-2.5 border-[1.5px] border-[#4F92F8] rounded-xl text-xs font-semibold bg-white text-[#191F28] outline-none"
+            />
+          </div>
+        )}
+      </div>
+
+      <div>
+        <span className="block text-xs font-bold text-[#191F28] mb-1.5">
+          결제 방식 <span className="text-[#F04452]">*필수</span>
+        </span>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            aria-pressed={paymentMethod === "BANK_TRANSFER"}
+            onClick={() => setPaymentMethod("BANK_TRANSFER")}
+            className={`p-2.5 rounded-xl border text-left transition ${
+              paymentMethod === "BANK_TRANSFER"
+                ? "bg-[#E8F3FF] border-[#4F92F8] text-[#1B64DA]"
+                : "bg-white border-[#E5E8EB] text-[#4E5968] hover:bg-[#F9FAFB]"
+            }`}
+          >
+            <div className="text-xs font-extrabold">🏦 계좌입금</div>
+            <div className="text-[11px] opacity-80 mt-0.5">
+              예약 후 계좌 이체
+            </div>
+          </button>
+          <button
+            type="button"
+            aria-pressed={paymentMethod === "ONSITE"}
+            onClick={() => setPaymentMethod("ONSITE")}
+            className={`p-2.5 rounded-xl border text-left transition ${
+              paymentMethod === "ONSITE"
+                ? "bg-[#E8F8F0] border-[#03B26C] text-[#027A48]"
+                : "bg-white border-[#E5E8EB] text-[#4E5968] hover:bg-[#F9FAFB]"
+            }`}
+          >
+            <div className="text-xs font-extrabold">💳 현장결제</div>
+            <div className="text-[11px] opacity-80 mt-0.5">
+              방문 시 카드·현금
+            </div>
+          </button>
+        </div>
+        {paymentMethod === "BANK_TRANSFER" && bankAccount ? (
+          <div className="mt-2 px-3 py-2 rounded-xl bg-[#F2F4F6] border border-[#E5E8EB] flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-[#4E5968] font-semibold truncate">
+              입금계좌: {bankAccount}
+            </span>
+            <button
+              type="button"
+              onClick={() => onCopyBankAccount(bankAccount)}
+              className="px-2 py-1 rounded-lg bg-white border border-[#E5E8EB] font-bold text-[#191F28] shrink-0"
+            >
+              복사
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function isProductSoldOut(product: Product): boolean {
   return Boolean(
@@ -85,6 +224,12 @@ export default function CustomerStorePage() {
   // 1. 내 예약 검색 상태 (닉네임 + 연락처 공통 동기화)
   const [nickInput, setNickInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
+  const [paymentMethod, setPaymentMethod] =
+    useState<PaymentMethod>("BANK_TRANSFER");
+  const [pickupTimeOption, setPickupTimeOption] = useState<string>(
+    PICKUP_TIME_PRESETS[0],
+  );
+  const [customPickupTime, setCustomPickupTime] = useState("");
   const [searchedNick, setSearchedNick] = useState<string | null>(null);
   const [searchedPhone, setSearchedPhone] = useState<string>("");
   const [isSearching, setIsSearching] = useState(false);
@@ -400,6 +545,8 @@ export default function CustomerStorePage() {
     orderItems: Array<{ product_id: string; quantity: number }>,
     displayItems: Array<{ name: string; qty: number }>,
     clearCartOnSuccess: boolean,
+    resolvedPickupTime: string,
+    selectedPaymentMethod: PaymentMethod,
   ): Promise<boolean> => {
     if (submittingRef.current) return false;
     submittingRef.current = true;
@@ -411,6 +558,8 @@ export default function CustomerStorePage() {
         customer_phone: cleanPhone.replace(/\D/g, ""),
         fulfillment_type: "PICKUP" as const,
         delivery_address: "",
+        pickup_time: resolvedPickupTime,
+        payment_method: selectedPaymentMethod,
         source: "WEB" as const,
         items: orderItems,
       };
@@ -527,6 +676,18 @@ export default function CustomerStorePage() {
     }
   };
 
+  const resolvePickupTime = (): string | null => {
+    if (pickupTimeOption === "CUSTOM") {
+      const trimmed = customPickupTime.trim();
+      if (!trimmed) {
+        alert("방문 예정 시간을 입력하거나 시간대 버튼을 선택해 주세요!");
+        return null;
+      }
+      return trimmed;
+    }
+    return pickupTimeOption;
+  };
+
   // 단품 주문 접수
   const handleSingleOrderGoToKakao = async () => {
     if (!orderModalProduct || isSubmittingOrder) return;
@@ -546,6 +707,9 @@ export default function CustomerStorePage() {
       return;
     }
 
+    const resolvedPickupTime = resolvePickupTime();
+    if (!resolvedPickupTime) return;
+
     const { product, qty } = orderModalProduct;
     const ok = await submitWebOrder(
       cleanNick,
@@ -553,6 +717,8 @@ export default function CustomerStorePage() {
       [{ product_id: product.id, quantity: qty }],
       [{ name: product.name, qty }],
       false,
+      resolvedPickupTime,
+      paymentMethod,
     );
     if (ok) {
       setOrderModalProduct(null);
@@ -583,12 +749,17 @@ export default function CustomerStorePage() {
       return;
     }
 
+    const resolvedPickupTime = resolvePickupTime();
+    if (!resolvedPickupTime) return;
+
     const ok = await submitWebOrder(
       cleanNick,
       cleanPhone,
       cartItems.map((c) => ({ product_id: c.id, quantity: c.qty })),
       cartItems.map((c) => ({ name: c.name, qty: c.qty })),
       true,
+      resolvedPickupTime,
+      paymentMethod,
     );
     if (ok) {
       setIsCartModalOpen(false);
@@ -900,6 +1071,18 @@ export default function CustomerStorePage() {
                                 <span className="font-bold text-[#1B64DA]">
                                   🏬 매장 픽업
                                 </span>
+                                <span
+                                  className={`font-bold ${
+                                    order.payment_method === "ONSITE"
+                                      ? "text-[#027A48]"
+                                      : "text-[#1B64DA]"
+                                  }`}
+                                >
+                                  {order.payment_method === "ONSITE"
+                                    ? "💳 현장결제"
+                                    : "🏦 계좌입금"}
+                                </span>
+                                <span>⏰ {order.pickup_time || "오후 방문"}</span>
                                 <span>📅 {order.order_date}</span>
                                 {item.is_received ? (
                                   <span className="font-bold text-[#03B26C]">
@@ -1257,6 +1440,22 @@ export default function CustomerStorePage() {
                 </p>
               </div>
 
+              <OrderCheckoutOptions
+                idPrefix="single-order"
+                pickupTimeOption={pickupTimeOption}
+                setPickupTimeOption={setPickupTimeOption}
+                customPickupTime={customPickupTime}
+                setCustomPickupTime={setCustomPickupTime}
+                paymentMethod={paymentMethod}
+                setPaymentMethod={setPaymentMethod}
+                bankAccount={settings?.bank_account}
+                onCopyBankAccount={async (account) => {
+                  if (await copyTextSafe(account)) {
+                    showToast("계좌번호가 복사되었습니다!");
+                  }
+                }}
+              />
+
               <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
                 매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할 주문서가
                 자동 복사됩니다.
@@ -1409,6 +1608,22 @@ export default function CustomerStorePage() {
                       사용됩니다.
                     </p>
                   </div>
+
+                  <OrderCheckoutOptions
+                    idPrefix="cart-order"
+                    pickupTimeOption={pickupTimeOption}
+                    setPickupTimeOption={setPickupTimeOption}
+                    customPickupTime={customPickupTime}
+                    setCustomPickupTime={setCustomPickupTime}
+                    paymentMethod={paymentMethod}
+                    setPaymentMethod={setPaymentMethod}
+                    bankAccount={settings?.bank_account}
+                    onCopyBankAccount={async (account) => {
+                      if (await copyTextSafe(account)) {
+                        showToast("계좌번호가 복사되었습니다!");
+                      }
+                    }}
+                  />
 
                   <p className="text-xs text-[#8B95A1] text-center leading-relaxed m-0">
                     매장 픽업 예약이 먼저 접수된 뒤, 공구방에 붙여넣기할
@@ -1611,15 +1826,35 @@ export default function CustomerStorePage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-3.5">
+            <div className="p-5 space-y-3.5 max-h-[82vh] overflow-y-auto">
               <div className="text-xs break-all">
                 주문번호: <strong>{orderSuccessReceipt.order.id}</strong>
+              </div>
+              <div className="p-3 rounded-xl bg-[#F9FAFB] border border-[#E5E8EB] text-xs space-y-1">
+                <div>
+                  결제 방식:{" "}
+                  <strong>
+                    {formatPaymentMethodLabel(
+                      orderSuccessReceipt.order.payment_method,
+                    )}
+                  </strong>
+                  {orderSuccessReceipt.order.payment_method === "ONSITE"
+                    ? " (매장 방문 시 카드·현금 결제)"
+                    : settings?.bank_account
+                      ? ` (${settings.bank_account})`
+                      : ""}
+                </div>
+                <div>
+                  픽업 예정:{" "}
+                  <strong>{orderSuccessReceipt.order.pickup_time}</strong>
+                </div>
               </div>
               <p className="text-sm">
                 픽업 안내: {settings?.pickup_guide}
                 <br />
-                예약 접수와 입금 확인은 별도입니다. 준비 상태는 예약 내역에서
-                확인해 주세요.
+                {orderSuccessReceipt.order.payment_method === "ONSITE"
+                  ? "매장 방문 시 현장 결제 후 수령하시면 됩니다."
+                  : "예약 접수와 입금 확인은 별도입니다. 준비 상태는 예약 내역에서 확인해 주세요."}
               </p>
               <div className="p-3.5 rounded-xl bg-[#E8F8F0] border border-[#b8ebd4] text-xs text-[#027A48] font-semibold leading-relaxed">
                 {orderSuccessReceipt.copied

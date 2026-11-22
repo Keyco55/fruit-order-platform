@@ -28,6 +28,13 @@ export function validateOrderInput(input: CreateOrderInput): CreateOrderInput {
   )
     throw new Error("주문 요청키가 올바르지 않습니다.");
   if (
+    input.payment_method !== undefined &&
+    input.payment_method !== "BANK_TRANSFER" &&
+    input.payment_method !== "ONSITE"
+  ) {
+    throw new Error("결제 방식을 올바르게 선택해 주세요.");
+  }
+  if (
     !Array.isArray(input.items) ||
     !input.items.length ||
     input.items.length > 100
@@ -51,6 +58,8 @@ export function validateOrderInput(input: CreateOrderInput): CreateOrderInput {
   return {
     ...input,
     kakao_nickname: input.kakao_nickname.trim(),
+    payment_method:
+      input.payment_method === "ONSITE" ? "ONSITE" : "BANK_TRANSFER",
     items: [...quantities]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([product_id, quantity]) => ({ product_id, quantity })),
@@ -69,6 +78,7 @@ export function orderFingerprint(input: CreateOrderInput): string {
         address: normalized.delivery_address?.trim() ?? "",
         pickup: normalized.pickup_time?.trim() ?? "",
         memo: normalized.memo?.trim() ?? "",
+        paymentMethod: normalized.payment_method ?? "BANK_TRANSFER",
         source: normalized.source ?? "WEB",
         items: normalized.items,
       }),

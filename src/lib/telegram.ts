@@ -1,5 +1,5 @@
 import type { Order } from "@/types/domain";
-import { formatKRW } from "@/lib/formatters";
+import { formatKRW, formatPaymentMethodLabel } from "@/lib/formatters";
 
 /**
  * 신규 주문 발생 시 사장님 텔레그램으로 실시간 푸시 알림을 발송합니다.
@@ -22,6 +22,7 @@ export async function sendTelegramOrderNotification(order: Order): Promise<boole
     `👤 닉네임: ${order.kakao_nickname}${order.customer_phone_last4 ? ` (${order.customer_phone_last4})` : ""}`,
     `📦 주문내역:\n${itemLines}`,
     `💰 합계금액: ${formatKRW(order.total_amount)}`,
+    `💳 결제방식: ${formatPaymentMethodLabel(order.payment_method)}`,
     `⏰ 픽업예정: ${order.pickup_time || "미정"}`,
     order.memo ? `📝 요청사항: ${order.memo}` : "",
   ]
