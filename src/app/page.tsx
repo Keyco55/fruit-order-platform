@@ -41,8 +41,8 @@ const CART_STORAGE_KEY = "customer_cart_yucheon";
 const MAX_ORDER_QTY_PER_ITEM = 999;
 
 const PICKUP_TIME_PRESETS = [
-  "오늘 오후 (12~17시)",
-  "오늘 저녁 (17시 이후)",
+  "오전 09~12시",
+  "오후 12~19시",
   "내일 방문",
 ] as const;
 
