@@ -793,3 +793,39 @@ export function deleteProductAdmin(productId: string): void {
   }
   saveDb(db);
 }
+
+export function reorderProductsAdmin(orderedIds: string[]): Product[] {
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    throw new Error("정렬할 상품 순서 목록이 필요합니다.");
+  }
+
+  const db = loadDb();
+  const currentSorted = [...db.products].sort(
+    (a, b) => a.sort_order - b.sort_order,
+  );
+  const byId = new Map(currentSorted.map((p) => [p.id, p]));
+
+  const seen = new Set<string>();
+  const reordered: Product[] = [];
+  for (const rawId of orderedIds) {
+    const id = typeof rawId === "string" ? rawId.trim() : "";
+    if (!id || seen.has(id)) continue;
+    const matched = byId.get(id);
+    if (matched) {
+      seen.add(id);
+      reordered.push(matched);
+    }
+  }
+  for (const product of currentSorted) {
+    if (!seen.has(product.id)) {
+      reordered.push(product);
+    }
+  }
+
+  db.products = reordered.map((product, index) => ({
+    ...product,
+    sort_order: index + 1,
+  }));
+  saveDb(db);
+  return getProducts({ includeHidden: true });
+}

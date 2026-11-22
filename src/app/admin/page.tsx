@@ -377,6 +377,24 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // 과일 노출 순서 일괄 변경
+  const handleReorderProducts = async (orderedIds: string[]) => {
+    const res = await fetch("/api/admin/products", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reorder_ids: orderedIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || "상품 노출 순서 저장 실패");
+      return;
+    }
+    setProducts(data.products);
+    setLastUpdatedAt(formatClockNow());
+    await fetchAdminData();
+    showToast("✅ 손님 화면 노출 순서가 저장되었습니다.");
+  };
+
   // 과일 재고 원자적 증감 (H05)
   const handleAdjustProductStock = async (productId: string, delta: number) => {
     const res = await fetch("/api/admin/products", {
@@ -935,6 +953,9 @@ export default function AdminDashboardPage() {
             onRefresh={() => void handleRefreshTab("PRODUCTS", "상품·재고")}
             onCreateProduct={handleCreateProduct}
             onPatchProduct={handlePatchProduct}
+            onReorderProducts={(ids) =>
+              runMutation(() => handleReorderProducts(ids))
+            }
             onAdjustStock={(id, delta) =>
               runMutation(() => handleAdjustProductStock(id, delta))
             }

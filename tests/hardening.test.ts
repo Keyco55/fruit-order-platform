@@ -23,9 +23,14 @@ import { filterOrderPeriod, readPeriod } from "../src/lib/order-period";
 import {
   getKstDateString,
   sanitizeOrdersForPublic,
+  sanitizeProductsForPublic,
 } from "../src/lib/store-helpers";
 import { getOrderAttempt, ORDER_ATTEMPT_KEY } from "../src/lib/order-attempt";
-import { ordersToCsv, parseKakaoChatMessage } from "../src/lib/formatters";
+import {
+  formatKakaoNoticeText,
+  ordersToCsv,
+  parseKakaoChatMessage,
+} from "../src/lib/formatters";
 import { verifyPassword } from "../src/lib/password";
 import {
   ADMIN_SESSION_COOKIE_NAME,
@@ -37,6 +42,10 @@ import {
   POST as ordersPOST,
 } from "../src/app/api/orders/route";
 import { GET as bootstrapGET } from "../src/app/api/bootstrap/route";
+import {
+  POST as adminProductsPOST,
+  PATCH as adminProductsPATCH,
+} from "../src/app/api/admin/products/route";
 import {
   POST as settingsPOST,
   PATCH as settingsPATCH,
@@ -467,5 +476,105 @@ describe("2차 QA 기능·보안 회귀", () => {
     } finally {
       delete process.env.VERCEL_ENV;
     }
+  });
+
+  it("손님 공개 응답은 잔여 수량 숫자를 숨기고 관리자 응답에만 노출한다", async () => {
+    const publicRes = await bootstrapGET(request("/api/bootstrap"));
+    assert.equal(publicRes.status, 200);
+    const publicJson = await publicRes.json();
+    const publicStrawberry = publicJson.products.find(
+      (p: { id: string }) => p.id === "prod-strawberry-1",
+    );
+    assert.ok(publicStrawberry);
+    assert.equal(publicStrawberry.remain_stock, 0);
+    assert.equal(publicStrawberry.total_stock, 0);
+    assert.equal(publicStrawberry.is_sold_out, false);
+    assert.equal("stock_version" in publicStrawberry, false);
+
+    const session = cookie();
+    const adminRes = await bootstrapGET(
+      request("/api/bootstrap?admin=1", undefined, session),
+    );
+    assert.equal(adminRes.status, 200);
+    const adminJson = await adminRes.json();
+    const adminStrawberry = adminJson.products.find(
+      (p: { id: string }) => p.id === "prod-strawberry-1",
+    );
+    assert.ok(adminStrawberry.remain_stock > 0);
+    assert.ok(adminStrawberry.total_stock > 0);
+
+    const notice = formatKakaoNoticeText(
+      adminJson.settings,
+      adminJson.products,
+    );
+    assert.equal(/\[한정 \d+개\]/.test(notice), false);
+
+    const sanitizedSoldOut = sanitizeProductsForPublic([
+      { ...adminStrawberry, is_limited: true, remain_stock: 0 },
+    ])[0];
+    assert.equal(sanitizedSoldOut.is_sold_out, true);
+    assert.equal(sanitizedSoldOut.remain_stock, 0);
+
+    const overStockRes = await ordersPOST(
+      request("/api/orders", {
+        ...body(),
+        items: [{ product_id: "prod-strawberry-1", quantity: 999 }],
+      }),
+    );
+    assert.equal(overStockRes.status, 400);
+    const overStockErr = await overStockRes.json();
+    assert.equal(/\(\d+개\)/.test(overStockErr.error), false);
+    assert.match(overStockErr.error, /부족합니다/);
+  });
+
+  it("관리자가 등록한 상품명·산지와 노출 순서가 손님 화면 데이터에 정확히 반영된다", async () => {
+    const session = cookie();
+    const createdRes = await adminProductsPOST(
+      request(
+        "/api/admin/products",
+        {
+          category: "PICKUP",
+          name: "설향 딸기 3x5",
+          unit_label: "500g 1팩",
+          price: 17900,
+          origin: "충남 논산",
+          is_limited: true,
+          total_stock: 20,
+          idempotency_key: randomUUID(),
+        },
+        session,
+      ),
+    );
+    assert.equal(createdRes.status, 201);
+    const createdJson = await createdRes.json();
+    const newProduct = createdJson.product;
+    assert.equal(newProduct.name, "설향 딸기 3x5");
+    assert.equal(newProduct.origin, "충남 논산");
+
+    const allIds = (createdJson.products as Array<{ id: string }>).map(
+      (p) => p.id,
+    );
+    const nextOrder = [
+      newProduct.id,
+      ...allIds.filter((id) => id !== newProduct.id),
+    ];
+
+    const reorderRes = await adminProductsPATCH(
+      request(
+        "/api/admin/products",
+        { reorder_ids: nextOrder },
+        session,
+        undefined,
+        "PATCH",
+      ),
+    );
+    assert.equal(reorderRes.status, 200);
+
+    const publicRes = await bootstrapGET(request("/api/bootstrap"));
+    assert.equal(publicRes.status, 200);
+    const publicJson = await publicRes.json();
+    assert.equal(publicJson.products[0].id, newProduct.id);
+    assert.equal(publicJson.products[0].name, "설향 딸기 3x5");
+    assert.equal(publicJson.products[0].origin, "충남 논산");
   });
 });

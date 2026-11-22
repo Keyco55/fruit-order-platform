@@ -6,6 +6,7 @@ import {
   deleteProductAdmin,
   getProductAggregations,
   getProducts,
+  reorderProductsAdmin,
   updateProductAdmin,
 } from "@/lib/repository";
 import type { CreateProductInput, Product } from "@/types/domain";
@@ -38,6 +39,9 @@ export async function POST(request: NextRequest) {
 
     const product = await createProductAdmin({
       ...body,
+      name: body.name.trim(),
+      unit_label: body.unit_label?.trim() || "1팩",
+      origin: body.origin?.trim() || "국산",
       category: "PICKUP",
       total_stock: Math.floor(totalStock),
       remain_stock:
@@ -74,11 +78,30 @@ export async function PATCH(request: NextRequest) {
       );
     }
     const body = (await request.json()) as {
-      id: string;
+      id?: string;
+      reorder_ids?: string[];
       stock_delta?: number;
       expected_stock_version?: number;
       patch?: Partial<Omit<Product, "id" | "created_at">>;
     };
+
+    if (Array.isArray(body.reorder_ids)) {
+      const cleanIds = body.reorder_ids.filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      );
+      if (cleanIds.length === 0) {
+        return NextResponse.json(
+          { error: "정렬할 상품 ID 목록이 필요합니다." },
+          { status: 400 },
+        );
+      }
+      const products = await reorderProductsAdmin(cleanIds);
+      const aggregations = await getProductAggregations();
+      return NextResponse.json({
+        products,
+        aggregations,
+      });
+    }
 
     if (!body.id) {
       return NextResponse.json(
@@ -97,6 +120,15 @@ export async function PATCH(request: NextRequest) {
       const safePatch = { ...body.patch };
       if (safePatch.category !== undefined) {
         safePatch.category = "PICKUP";
+      }
+      if (typeof safePatch.name === "string") {
+        safePatch.name = safePatch.name.trim();
+      }
+      if (typeof safePatch.unit_label === "string") {
+        safePatch.unit_label = safePatch.unit_label.trim();
+      }
+      if (typeof safePatch.origin === "string") {
+        safePatch.origin = safePatch.origin.trim() || "국산";
       }
       updated = await updateProductAdmin(
         body.id,

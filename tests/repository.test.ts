@@ -15,6 +15,7 @@ import {
   getOrders,
   getProducts,
   getStoreSettings,
+  reorderProductsAdmin,
   resetDemoDatabase,
 } from "../src/lib/repository";
 import { isSupabaseConfigured } from "../src/lib/supabase-admin";
@@ -315,5 +316,27 @@ describe("리포지토리 및 공통 스토어 헬퍼 검증", () => {
     });
     assert.equal(preservedOrders.length, 1);
     assert.equal(preservedOrders[0].items[0].product_id, null);
+  });
+
+  it("관리자 상품 노출 순서 변경(reorderProductsAdmin)이 sort_order를 영속 반영한다", async () => {
+    await resetDemoDatabase();
+
+    const before = await getProducts({ includeHidden: true });
+    assert.ok(before.length >= 3);
+    const first = before[0];
+    const last = before[before.length - 1];
+
+    const reorderedIds = [
+      last.id,
+      ...before.slice(0, before.length - 1).map((p) => p.id),
+    ];
+    const after = await reorderProductsAdmin(reorderedIds);
+    assert.equal(after[0].id, last.id);
+    assert.equal(after[0].sort_order, 1);
+    assert.equal(after[1].id, first.id);
+    assert.equal(after[1].sort_order, 2);
+
+    const visible = await getProducts({ includeHidden: false });
+    assert.equal(visible[0].id, last.id);
   });
 });

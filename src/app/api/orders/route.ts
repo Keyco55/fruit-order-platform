@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createOrder, getOrders, getProducts } from "@/lib/repository";
-import { sanitizeOrdersForPublic } from "@/lib/store-helpers";
+import {
+  sanitizeOrdersForPublic,
+  sanitizeProductsForPublic,
+  sanitizePublicOrderErrorMessage,
+} from "@/lib/store-helpers";
 import { sendTelegramOrderNotification } from "@/lib/telegram";
 import { consumeRateLimit } from "@/lib/rate-limit";
 import {
@@ -87,7 +91,7 @@ export async function POST(request: NextRequest) {
         order: sanitizeOrdersForPublic([order])[0],
         products:
           productResult.status === "fulfilled"
-            ? productResult.value
+            ? sanitizeProductsForPublic(productResult.value)
             : undefined,
         myOrders:
           orderResult.status === "fulfilled"
@@ -102,6 +106,9 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "주문 처리 중 오류가 발생했습니다.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: sanitizePublicOrderErrorMessage(message) },
+      { status: 400 },
+    );
   }
 }

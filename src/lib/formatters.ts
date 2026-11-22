@@ -103,10 +103,10 @@ export function formatKakaoNoticeText(
 
   const formatLine = (p: Product) => {
     const stockTag =
-      p.is_limited && p.remain_stock <= 0
+      p.is_limited && (p.is_sold_out ?? p.remain_stock <= 0)
         ? " [품절]"
         : p.is_limited
-          ? ` [한정 ${p.remain_stock}개]`
+          ? " [한정수량]"
           : "";
     const brixTag = p.brix ? ` (${p.brix})` : "";
     return `• ${p.name}${brixTag} ${p.unit_label} : ${formatKRW(p.price)}${stockTag}`;

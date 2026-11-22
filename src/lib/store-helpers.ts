@@ -89,6 +89,33 @@ export function enrichAndFilterOrders(
 }
 
 /**
+ * 공개 스토어프론트 응답에서 정확한 잔여/전체 재고 수량을 숨기고 품절 여부만 제공합니다.
+ */
+export function sanitizeProductsForPublic(products: Product[]): Product[] {
+  return products.map((product) => {
+    const isSoldOut =
+      product.is_sold_out ?? (product.is_limited && product.remain_stock <= 0);
+    return {
+      ...product,
+      total_stock: 0,
+      remain_stock: 0,
+      stock_version: undefined,
+      is_sold_out: isSoldOut,
+    };
+  });
+}
+
+/**
+ * 공개 주문 오류 메시지에서 정확한 잔여 재고 수량 숫자를 마스킹합니다.
+ */
+export function sanitizePublicOrderErrorMessage(message: string): string {
+  return message.replace(
+    /남은 수량\(\s*\d+\s*개?\)\s*이 부족합니다\.?/g,
+    "주문 가능 수량이 부족합니다.",
+  );
+}
+
+/**
  * 공개 고객 조회 응답에서 전체 연락처/배송지 등 불필요한 개인정보를 제거합니다.
  */
 export function sanitizeOrdersForPublic(orders: Order[]): Order[] {

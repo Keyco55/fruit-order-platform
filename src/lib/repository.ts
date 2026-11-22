@@ -143,6 +143,15 @@ export async function deleteProductAdmin(productId: string): Promise<void> {
   demoStore.deleteProductAdmin(productId);
 }
 
+export async function reorderProductsAdmin(
+  orderedIds: string[],
+): Promise<Product[]> {
+  if (getDataSourceMode() === "supabase") {
+    return supabaseStore.reorderProductsAdminSupabase(orderedIds);
+  }
+  return demoStore.reorderProductsAdmin(orderedIds);
+}
+
 export async function resetDemoDatabase(): Promise<{
   settings: StoreSettings;
   products: Product[];

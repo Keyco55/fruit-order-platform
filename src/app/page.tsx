@@ -37,6 +37,37 @@ const NICK_STORAGE_KEY = "customer_nickname_yucheon";
 const PHONE_STORAGE_KEY = "customer_phone_yucheon";
 const CART_STORAGE_KEY = "customer_cart_yucheon";
 
+const MAX_ORDER_QTY_PER_ITEM = 999;
+
+function isProductSoldOut(product: Product): boolean {
+  return Boolean(
+    product.is_sold_out ?? (product.is_limited && product.remain_stock <= 0),
+  );
+}
+
+function syncCartWithProducts(
+  currentCart: CartItem[],
+  freshProducts: Product[],
+): CartItem[] {
+  return currentCart.flatMap((item) => {
+    const product = freshProducts.find(
+      (p) => p.id === item.id && p.is_visible && !isProductSoldOut(p),
+    );
+    const qty = product ? Math.min(item.qty, MAX_ORDER_QTY_PER_ITEM) : 0;
+    return product && qty > 0
+      ? [
+          {
+            id: product.id,
+            name: product.name,
+            unit_label: product.unit_label,
+            price: product.price,
+            qty,
+          },
+        ]
+      : [];
+  });
+}
+
 export default function CustomerStorePage() {
   const [settings, setSettings] = useState<Omit<
     StoreSettings,
@@ -100,8 +131,22 @@ export default function CustomerStorePage() {
       if (!res.ok) throw new Error("상품 정보를 불러오지 못했습니다.");
       setLoadError("");
       const data = await res.json();
+      const fresh: Product[] = data.products ?? [];
       setSettings(data.settings);
-      setProducts(data.products ?? []);
+      setProducts(fresh);
+      if (
+        typeof window !== "undefined" &&
+        !localStorage.getItem(ORDER_ATTEMPT_KEY)
+      ) {
+        setCartItems((prev) => {
+          const synced = syncCartWithProducts(prev, fresh);
+          if (JSON.stringify(synced) !== JSON.stringify(prev)) {
+            localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(synced));
+            return synced;
+          }
+          return prev;
+        });
+      }
     } catch (err) {
       setLoadError(
         err instanceof Error ? err.message : "네트워크를 확인해 주세요.",
@@ -225,7 +270,7 @@ export default function CustomerStorePage() {
   const addToCart = (product: Product, event?: React.MouseEvent) => {
     if (event) event.stopPropagation();
 
-    if (product.is_limited && product.remain_stock <= 0) {
+    if (isProductSoldOut(product)) {
       alert("품절된 상품입니다.");
       return;
     }
@@ -235,9 +280,8 @@ export default function CustomerStorePage() {
 
     if (existingIndex > -1) {
       const existing = cartItems[existingIndex];
-      const maxStock = product.is_limited ? product.remain_stock : 999;
-      if (existing.qty + 1 > maxStock) {
-        alert(`남은 수량(${maxStock}개)을 초과할 수 없습니다.`);
+      if (existing.qty + 1 > MAX_ORDER_QTY_PER_ITEM) {
+        alert("한 번에 주문 가능한 최대 수량을 초과했습니다.");
         return;
       }
       nextCart = cartItems.map((c, i) =>
@@ -264,11 +308,9 @@ export default function CustomerStorePage() {
     const nextCart = cartItems
       .map((item) => {
         if (item.id === productId) {
-          const product = products.find((p) => p.id === productId);
-          const maxStock = product?.is_limited ? product.remain_stock : 999;
           const nextQty = item.qty + delta;
-          if (nextQty > maxStock) {
-            alert(`남은 수량(${maxStock}개)을 초과할 수 없습니다.`);
+          if (nextQty > MAX_ORDER_QTY_PER_ITEM) {
+            alert("한 번에 주문 가능한 최대 수량을 초과했습니다.");
             return item;
           }
           return { ...item, qty: nextQty };
@@ -288,7 +330,7 @@ export default function CustomerStorePage() {
   // 단품 바로 주문 모달 열기
   const openOrderModal = (product: Product, event?: React.MouseEvent) => {
     if (event) event.stopPropagation();
-    if (product.is_limited && product.remain_stock <= 0) {
+    if (isProductSoldOut(product)) {
       alert("품절된 상품입니다.");
       return;
     }
@@ -321,23 +363,7 @@ export default function CustomerStorePage() {
       setProducts(fresh);
       // 접수 결과가 불명확하면 원래 품목을 보존해 같은 요청키로 재시도한다.
       if (localStorage.getItem(ORDER_ATTEMPT_KEY)) return;
-      const next = cartItems.flatMap((item) => {
-        const p = fresh.find((p) => p.id === item.id && p.is_visible);
-        const qty = p
-          ? Math.min(item.qty, p.is_limited ? p.remain_stock : 999)
-          : 0;
-        return p && qty > 0
-          ? [
-              {
-                id: p.id,
-                name: p.name,
-                unit_label: p.unit_label,
-                price: p.price,
-                qty,
-              },
-            ]
-          : [];
-      });
+      const next = syncCartWithProducts(cartItems, fresh);
       if (JSON.stringify(next) !== JSON.stringify(cartItems)) {
         updateCartState(next);
         showToast("장바구니 가격·판매 상태·수량을 최신 정보로 갱신했습니다.");
@@ -406,8 +432,10 @@ export default function CustomerStorePage() {
             return (
               !p ||
               !old ||
+              p.name !== old.name ||
               p.price !== old.price ||
-              (p.is_limited && p.remain_stock < i.quantity)
+              !p.is_visible ||
+              isProductSoldOut(p)
             );
           });
           if (changed) {
@@ -419,12 +447,12 @@ export default function CustomerStorePage() {
                 (p) => p.id === orderModalProduct.product.id,
               );
               setOrderModalProduct(
-                p
+                p && p.is_visible && !isProductSoldOut(p)
                   ? {
                       product: p,
                       qty: Math.min(
                         orderModalProduct.qty,
-                        p.is_limited ? p.remain_stock : 999,
+                        MAX_ORDER_QTY_PER_ITEM,
                       ),
                     }
                   : null,
@@ -602,18 +630,20 @@ export default function CustomerStorePage() {
     return filteredReservations.reduce((sum, o) => sum + o.total_amount, 0);
   }, [filteredReservations]);
 
-  // 필터링된 상품 목록 (매장 픽업 단일)
+  // 필터링된 상품 목록 (관리자 설정 순서 우선, 매장 픽업 단일)
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      if (productSearch.trim()) {
-        return (
-          matchesKoreanSearch(p.name, productSearch) ||
-          matchesKoreanSearch(p.origin, productSearch) ||
-          matchesKoreanSearch(p.description, productSearch)
-        );
-      }
-      return true;
-    });
+    return [...products]
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .filter((p) => {
+        if (productSearch.trim()) {
+          return (
+            matchesKoreanSearch(p.name, productSearch) ||
+            matchesKoreanSearch(p.origin, productSearch) ||
+            matchesKoreanSearch(p.description, productSearch)
+          );
+        }
+        return true;
+      });
   }, [products, productSearch]);
 
   return (
@@ -944,8 +974,7 @@ export default function CustomerStorePage() {
               </div>
             ) : (
               filteredProducts.map((product) => {
-                const isSoldOut =
-                  product.is_limited && product.remain_stock <= 0;
+                const isSoldOut = isProductSoldOut(product);
 
                 return (
                   <article
@@ -1025,10 +1054,6 @@ export default function CustomerStorePage() {
                           <span>
                             {isSoldOut ? (
                               <strong className="text-[#B0B8C1]">품절</strong>
-                            ) : product.is_limited ? (
-                              <strong className="text-[#FF8A00]">
-                                잔여 {product.remain_stock}개
-                              </strong>
                             ) : (
                               <strong className="text-[#03B26C]">
                                 구매가능
@@ -1174,13 +1199,8 @@ export default function CustomerStorePage() {
                       onClick={() =>
                         setOrderModalProduct((prev) => {
                           if (!prev) return null;
-                          const maxStock = prev.product.is_limited
-                            ? prev.product.remain_stock
-                            : 999;
-                          if (prev.qty + 1 > maxStock) {
-                            alert(
-                              `남은 수량(${maxStock}개)을 초과할 수 없습니다.`,
-                            );
+                          if (prev.qty + 1 > MAX_ORDER_QTY_PER_ITEM) {
+                            alert("한 번에 주문 가능한 최대 수량을 초과했습니다.");
                             return prev;
                           }
                           return { ...prev, qty: prev.qty + 1 };

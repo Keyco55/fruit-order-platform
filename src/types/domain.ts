@@ -37,6 +37,7 @@ export interface Product {
   description: string;
   images: string[];
   is_limited: boolean;
+  is_sold_out?: boolean;
   total_stock: number;
   remain_stock: number;
   stock_version?: number;

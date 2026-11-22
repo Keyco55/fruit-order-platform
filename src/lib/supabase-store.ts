@@ -562,6 +562,63 @@ export async function deleteProductAdminSupabase(
   throwIfError(error, "상품 삭제에 실패했습니다.");
 }
 
+export async function reorderProductsAdminSupabase(
+  orderedIds: string[],
+): Promise<Product[]> {
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    throw new Error("정렬할 상품 순서 목록이 필요합니다.");
+  }
+
+  const client = getSupabaseAdminClient();
+  const { data: currentRows, error: fetchError } = await client
+    .from("products")
+    .select("id, sort_order")
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
+
+  throwIfError(fetchError, "현재 상품 순서를 불러오지 못했습니다.");
+
+  const rows = (currentRows ?? []) as Array<{ id: string; sort_order: number }>;
+  const existingById = new Map(rows.map((r) => [r.id, r]));
+
+  const seen = new Set<string>();
+  const finalOrder: Array<{ id: string; sort_order: number }> = [];
+  for (const rawId of orderedIds) {
+    const id = typeof rawId === "string" ? rawId.trim() : "";
+    if (!id || !isValidUuid(id) || seen.has(id)) continue;
+    const matched = existingById.get(id);
+    if (matched) {
+      seen.add(id);
+      finalOrder.push(matched);
+    }
+  }
+  for (const row of rows) {
+    if (!seen.has(row.id)) {
+      finalOrder.push(row);
+    }
+  }
+
+  const updates = finalOrder
+    .map((row, index) => ({ id: row.id, prev: row.sort_order, next: index + 1 }))
+    .filter((entry) => entry.prev !== entry.next);
+
+  if (updates.length > 0) {
+    const results = await Promise.all(
+      updates.map((entry) =>
+        client
+          .from("products")
+          .update({ sort_order: entry.next })
+          .eq("id", entry.id),
+      ),
+    );
+    for (const res of results) {
+      throwIfError(res.error, "상품 노출 순서 저장에 실패했습니다.");
+    }
+  }
+
+  return getProductsSupabase({ includeHidden: true });
+}
+
 export async function resetDemoDatabaseSupabase(): Promise<{
   settings: StoreSettings;
   products: Product[];

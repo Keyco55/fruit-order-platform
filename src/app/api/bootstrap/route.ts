@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { consumeRateLimit } from "@/lib/rate-limit";
 import { validLookup } from "@/lib/order-validation";
 import { readPeriod } from "@/lib/order-period";
-import { buildProductAggregations } from "@/lib/store-helpers";
+import {
+  buildProductAggregations,
+  sanitizeOrdersForPublic,
+  sanitizeProductsForPublic,
+} from "@/lib/store-helpers";
 import { isAdminRequestAuthenticated } from "@/lib/admin-auth";
 import {
   getDataSourceMode,
@@ -10,7 +14,6 @@ import {
   getProducts,
   getStoreSettings,
 } from "@/lib/repository";
-import { sanitizeOrdersForPublic } from "@/lib/store-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +77,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       mode: getDataSourceMode(),
       settings: publicSettings,
-      products,
+      products: sanitizeProductsForPublic(products),
       myOrders,
     });
   } catch (err) {

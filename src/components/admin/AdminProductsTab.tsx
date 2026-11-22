@@ -2,7 +2,10 @@
 
 import React, { useMemo, useState, useRef, useEffect } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   Camera,
+  ChevronsUp,
   Eye,
   EyeOff,
   Minus,
@@ -19,7 +22,7 @@ import type { CreateProductInput, Product } from "@/types/domain";
 
 const QUICK_FRUIT_PRESETS = [
   {
-    name: "논산 설향 딸기 (특품)",
+    name: "설향 딸기 (특품)",
     unit_label: "500g 1팩",
     price: 12900,
     original_price: 15900,
@@ -31,7 +34,7 @@ const QUICK_FRUIT_PRESETS = [
       "https://images.unsplash.com/photo-1464965911861-746a04b4bca6?auto=format&fit=crop&w=900&q=80",
   },
   {
-    name: "김천 고당도 샤인머스켓",
+    name: "고당도 샤인머스켓",
     unit_label: "2kg 1박스 (2~3수)",
     price: 18500,
     original_price: 24000,
@@ -81,6 +84,7 @@ interface AdminProductsTabProps {
     successMsg: string,
     expectedVersion?: number,
   ) => Promise<boolean>;
+  onReorderProducts: (orderedIds: string[]) => Promise<void>;
   onAdjustStock: (productId: string, delta: number) => Promise<void>;
   onDeleteProduct: (productId: string, name: string) => Promise<void>;
   showToast: (msg: string) => void;
@@ -94,6 +98,7 @@ export function AdminProductsTab({
   onRefresh,
   onCreateProduct,
   onPatchProduct,
+  onReorderProducts,
   onAdjustStock,
   onDeleteProduct,
   showToast,
@@ -116,6 +121,7 @@ export function AdminProductsTab({
   const [editDraft, setEditDraft] = useState<{
     name: string;
     unit_label: string;
+    origin: string;
     price: string;
     remain_stock: string;
     total_stock: string;
@@ -123,6 +129,7 @@ export function AdminProductsTab({
   }>({
     name: "",
     unit_label: "",
+    origin: "국산",
     price: "",
     remain_stock: "0",
     total_stock: "0",
@@ -133,10 +140,10 @@ export function AdminProductsTab({
   const [prodName, setProdName] = useState("");
   const [prodUnit, setProdUnit] = useState("500g 1팩");
   const [prodPrice, setProdPrice] = useState("12900");
-  const [prodOriginalPrice, setProdOriginalPrice] = useState("15900");
+  const [prodOriginalPrice, setProdOriginalPrice] = useState("");
   const [prodOrigin, setProdOrigin] = useState("국산");
-  const [prodBrix, setProdBrix] = useState("15 Brix");
-  const [prodBadge, setProdBadge] = useState("오늘 경매 1등품");
+  const [prodBrix, setProdBrix] = useState("");
+  const [prodBadge, setProdBadge] = useState("");
   const [prodDesc, setProdDesc] = useState("");
   const [prodImage, setProdImage] = useState(
     "https://images.unsplash.com/photo-1464965911861-746a04b4bca6?auto=format&fit=crop&w=900&q=80",
@@ -146,8 +153,33 @@ export function AdminProductsTab({
   const [prodIsReceived, setProdIsReceived] = useState(true);
   const [isCompressingImg, setIsCompressingImg] = useState(false);
 
+  const resetCreateForm = () => {
+    setProdName("");
+    setProdUnit("500g 1팩");
+    setProdPrice("12900");
+    setProdOriginalPrice("");
+    setProdOrigin("국산");
+    setProdBrix("");
+    setProdBadge("");
+    setProdDesc("");
+    setProdIsLimited(true);
+    setProdStock("30");
+    setProdIsReceived(true);
+    setNewProductDirty(false);
+  };
+
+  const sortedProducts = useMemo(
+    () => [...products].sort((a, b) => a.sort_order - b.sort_order),
+    [products],
+  );
+
+  const productPositionMap = useMemo(
+    () => new Map(sortedProducts.map((p, idx) => [p.id, idx + 1])),
+    [sortedProducts],
+  );
+
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
+    return sortedProducts.filter((p) => {
       if (productFilter === "SOLDOUT" && !(p.is_limited && p.remain_stock <= 0))
         return false;
       if (productFilter === "HIDDEN" && p.is_visible) return false;
@@ -156,7 +188,51 @@ export function AdminProductsTab({
       }
       return true;
     });
-  }, [products, productFilter, productSearch]);
+  }, [sortedProducts, productFilter, productSearch]);
+
+  const handleMoveProduct = async (
+    productId: string,
+    direction: "TOP" | "UP" | "DOWN",
+  ) => {
+    if (busyProductId) return;
+    const fullIds = sortedProducts.map((p) => p.id);
+    const fullIndex = fullIds.indexOf(productId);
+    if (fullIndex === -1) return;
+
+    let nextIds: string[];
+    if (direction === "TOP") {
+      if (fullIndex === 0) return;
+      nextIds = [
+        productId,
+        ...fullIds.filter((existingId) => existingId !== productId),
+      ];
+    } else {
+      const visibleIds = filteredProducts.map((p) => p.id);
+      const visibleIndex = visibleIds.indexOf(productId);
+      const targetVisibleIndex =
+        direction === "UP" ? visibleIndex - 1 : visibleIndex + 1;
+      if (
+        visibleIndex === -1 ||
+        targetVisibleIndex < 0 ||
+        targetVisibleIndex >= visibleIds.length
+      ) {
+        return;
+      }
+      const neighborId = visibleIds[targetVisibleIndex];
+      const neighborFullIndex = fullIds.indexOf(neighborId);
+      if (neighborFullIndex === -1) return;
+      nextIds = [...fullIds];
+      nextIds[fullIndex] = neighborId;
+      nextIds[neighborFullIndex] = productId;
+    }
+
+    setBusyProductId(productId);
+    try {
+      await onReorderProducts(nextIds);
+    } finally {
+      setBusyProductId(null);
+    }
+  };
 
   const handleImageFileChange = async (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -196,6 +272,7 @@ export function AdminProductsTab({
     setEditDraft({
       name: product.name,
       unit_label: product.unit_label,
+      origin: product.origin || "국산",
       price: String(product.price),
       remain_stock: String(product.remain_stock),
       total_stock: String(product.total_stock),
@@ -214,6 +291,7 @@ export function AdminProductsTab({
     const next: Partial<Product> = {
       name: editDraft.name.trim(),
       unit_label: editDraft.unit_label.trim(),
+      origin: editDraft.origin.trim() || "국산",
       price: Number(editDraft.price),
       is_limited: editDraft.is_limited,
       remain_stock: Number(editDraft.remain_stock),
@@ -302,9 +380,7 @@ export function AdminProductsTab({
       });
 
       if (ok) {
-        setNewProductDirty(false);
-        setProdName("");
-        setProdDesc("");
+        resetCreateForm();
         setSubView("LIST");
       }
     } finally {
@@ -424,7 +500,7 @@ export function AdminProductsTab({
                 조건에 맞는 상품이 없습니다.
               </div>
             ) : (
-              filteredProducts.map((p) => {
+              filteredProducts.map((p, visibleIndex) => {
                 const isSoldOut = p.is_limited && p.remain_stock <= 0;
                 const stockPct =
                   p.is_limited && p.total_stock > 0
@@ -434,6 +510,12 @@ export function AdminProductsTab({
                       )
                     : 100;
                 const isEditing = editingId === p.id;
+                const displayPosition =
+                  productPositionMap.get(p.id) ?? visibleIndex + 1;
+                const isFirstVisible = visibleIndex === 0;
+                const isLastVisible =
+                  visibleIndex === filteredProducts.length - 1;
+                const isFirstOverall = displayPosition === 1;
 
                 return (
                   <div
@@ -453,6 +535,12 @@ export function AdminProductsTab({
                         />
                         <div className="min-w-0 space-y-0.5">
                           <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-extrabold shrink-0 bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title="손님 화면 노출 순서"
+                            >
+                              노출 {displayPosition}번
+                            </span>
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 bg-blue-50 text-blue-700">
                               픽업
                             </span>
@@ -466,7 +554,7 @@ export function AdminProductsTab({
                             )}
                           </div>
                           <p className="text-xs text-slate-500">
-                            {p.unit_label} ·{" "}
+                            {p.unit_label} · {p.origin || "국산"} ·{" "}
                             <strong className="text-slate-900">
                               {formatKRW(p.price)}
                             </strong>
@@ -474,14 +562,48 @@ export function AdminProductsTab({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                        <div className="inline-flex items-center gap-0.5 rounded-xl bg-slate-100 p-0.5 mr-0.5">
+                          <button
+                            type="button"
+                            disabled={isFirstOverall || busyProductId !== null}
+                            onClick={() => void handleMoveProduct(p.id, "TOP")}
+                            className="p-1.5 rounded-lg text-slate-600 hover:bg-white hover:text-emerald-700 disabled:opacity-35"
+                            title="맨 위(1번)로 올리기"
+                            aria-label={`${p.name} 맨 위로 올리기`}
+                          >
+                            <ChevronsUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isFirstVisible || busyProductId !== null}
+                            onClick={() => void handleMoveProduct(p.id, "UP")}
+                            className="p-1.5 rounded-lg text-slate-600 hover:bg-white hover:text-slate-900 disabled:opacity-35"
+                            title="순서 한 칸 위로"
+                            aria-label={`${p.name} 순서 위로`}
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLastVisible || busyProductId !== null}
+                            onClick={() =>
+                              void handleMoveProduct(p.id, "DOWN")
+                            }
+                            className="p-1.5 rounded-lg text-slate-600 hover:bg-white hover:text-slate-900 disabled:opacity-35"
+                            title="순서 한 칸 아래로"
+                            aria-label={`${p.name} 순서 아래로`}
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() =>
                             isEditing ? setEditingId(null) : startInlineEdit(p)
                           }
                           className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200"
-                          title="상품명·가격·재고 직접 수정"
+                          title="상품명·산지·가격·재고 직접 수정"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
@@ -519,7 +641,7 @@ export function AdminProductsTab({
                     {/* 인라인 빠른 수정 폼 */}
                     {isEditing && (
                       <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                           <label
                             htmlFor="admin-AdminProductsTab-input-2"
                             className="sr-only"
@@ -556,6 +678,25 @@ export function AdminProductsTab({
                               })
                             }
                             placeholder="단위 (예: 1팩)"
+                            className="px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold"
+                          />
+                          <label
+                            htmlFor="admin-AdminProductsTab-input-origin"
+                            className="sr-only"
+                          >
+                            산지 (원산지)
+                          </label>
+                          <input
+                            id="admin-AdminProductsTab-input-origin"
+                            type="text"
+                            value={editDraft.origin}
+                            onChange={(e) =>
+                              setEditDraft({
+                                ...editDraft,
+                                origin: e.target.value,
+                              })
+                            }
+                            placeholder="산지 (예: 국산)"
                             className="px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold"
                           />
                         </div>
@@ -832,6 +973,13 @@ export function AdminProductsTab({
                   + {preset.name}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={resetCreateForm}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition"
+              >
+                입력 초기화
+              </button>
             </div>
           </div>
 
@@ -853,12 +1001,16 @@ export function AdminProductsTab({
                 required
                 value={prodName}
                 onChange={(e) => setProdName(e.target.value)}
-                placeholder="예: 논산 설향 딸기 (특품)"
+                placeholder="예: 설향 딸기 3x5"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 text-xs font-bold"
               />
+              <p className="text-[11px] text-slate-400 mt-1">
+                입력하신 상품명 그대로 손님 주문 화면에 표시됩니다. (산지는 아래
+                산지 칸에 별도 입력)
+              </p>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
               <div>
                 <label
                   htmlFor="product-field-4"
@@ -903,7 +1055,24 @@ export function AdminProductsTab({
                   type="number"
                   value={prodOriginalPrice}
                   onChange={(e) => setProdOriginalPrice(e.target.value)}
+                  placeholder="선택 입력"
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-100 text-xs"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="product-field-origin"
+                  className="block text-xs font-bold text-slate-600 mb-1"
+                >
+                  산지(원산지)
+                </label>
+                <input
+                  id="product-field-origin"
+                  type="text"
+                  value={prodOrigin}
+                  onChange={(e) => setProdOrigin(e.target.value)}
+                  placeholder="예: 충남 논산"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-100 text-xs font-semibold"
                 />
               </div>
               <div>
@@ -911,7 +1080,7 @@ export function AdminProductsTab({
                   htmlFor="product-field-7"
                   className="block text-xs font-bold text-slate-600 mb-1"
                 >
-                  당도 / 산지
+                  당도(선택)
                 </label>
                 <input
                   id="product-field-7"
